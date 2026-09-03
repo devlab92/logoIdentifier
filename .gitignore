@@ -1,0 +1,29 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Private data — never commit company material
+input/
+output/
+logo/
+data/
+models/
+
+# Model weights anywhere
+*.onnx
+*.pt
+*.pth
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# Keep folder placeholders
+!**/.gitkeep
