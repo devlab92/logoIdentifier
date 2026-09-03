@@ -14,4 +14,4 @@
 | Phase | Status | Finished | Commit | Notes |
 |---|---|---|---|---|
 | phase00 bootstrap | done | 2026-09-03 | 6529e95 | scaffold |
-| phase01 foundation | done | 2026-09-03 | (this commit) | CLI skeleton, safe IO, CSV/JSON reports, synthetic data tools, 23 tests; baseline 42 img/s |
+| phase01 foundation | done | 2026-09-03 | de93fb4 | CLI skeleton, safe IO, CSV/JSON reports, synthetic data tools, 23 tests; baseline 42 img/s |
