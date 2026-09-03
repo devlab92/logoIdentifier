@@ -3,7 +3,19 @@
 > Keep this file matching reality. Update on any behavioral change.
 
 ## Current state
-Bootstrap only — no source code yet. Target design below.
+**phase01 done: skeleton, no detection.** `python -m logoscanner scan` walks a folder
+(`io_utils.iter_images`), loads each image safely (`io_utils.load_image`, downscaled to
+`config.MAX_SIDE`, decode failures recorded not raised), emits one `results.ResultRow` per
+image and writes `results.csv` + `summary.json`, then prints throughput and the ETA for
+10,000 images. Every image currently scores `0.0 / negative / method=none` - the signal
+modules below land from phase02. Synthetic data (`tools/make_synthetic.py`) stands in for
+the real labeled set until the user fills `data/labeled/`.
+
+Measured phase01 baseline: ~42 img/s on 800x600 PNGs (walk + decode + resize only),
+i.e. ~4 minutes for 10k. The 12 h budget in Key principles is therefore almost entirely
+available to the detection signals.
+
+Target design below.
 
 ## Target pipeline
 ```text

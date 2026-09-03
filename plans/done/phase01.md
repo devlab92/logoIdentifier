@@ -52,7 +52,43 @@ pytest -q
 - Label ~300 real images by dragging them into `data/labeled/positive/` and `data/labeled/negative/` (~100–150 positives). **Include the hard cases:** tiny logo, partial logo, logo over photos/charts/screenshots, dark & light variants, low resolution.
 
 ## Progress Log
-*(AI appends dated one-liners as milestones complete)*
+- 2026-09-03 - `.venv` created, 5 deps installed, versions pinned in `docs/SETUP.md`.
+- 2026-09-03 - package skeleton done: `config`, `io_utils`, `results`, `cli`, `__main__`.
+- 2026-09-03 - `scan` v0 walks + loads + writes CSV/JSON + prints throughput & 10k ETA.
+- 2026-09-03 - `tools/make_dummy_logo.py` written and run; `tests/assets/dummy_logo.png` committed.
+- 2026-09-03 - `tools/make_synthetic.py` + `tools/check_dataset.py` written; verify run over 50 synthetic images.
+- 2026-09-03 - 23 tests green; docs (SETUP, CODEMAP, CHANGELOG, ARCHITECTURE, DECISIONS D-007..D-009) updated.
 
 ## Completion Report
-*(filled at the end)*
+
+**Status:** done - 2026-09-03. All acceptance criteria met.
+
+**What shipped**
+- `requirements.txt` + `.venv` (Python 3.12.10): opencv-python 5.0.0.93, numpy 2.5.2, RapidFuzz 3.14.6, tqdm 4.70.0, pytest 9.1.1.
+- `logoscanner/`: `__init__` (0.1.0), `__main__`, `cli` (`scan`, `version`), `config` (BRAND_TERMS placeholder, IMAGE_EXTS, MAX_SIDE, band names + placeholder thresholds, `band_for`), `io_utils` (`iter_images`, `load_image`, `downscale`), `results` (`ResultRow`, CSV writer/reader, `summarize`, `write_json`).
+- `tools/`: `make_dummy_logo.py`, `make_synthetic.py`, `check_dataset.py`.
+- `tests/`: 23 tests across `test_io_utils`, `test_results`, `test_synthetic`, `test_cli`, plus `conftest.py` and the committed `tests/assets/dummy_logo.png`.
+- Docs: SETUP (real environment + command table), CODEMAP (one entry per new file), CHANGELOG, ARCHITECTURE current state, DECISIONS D-007/D-008/D-009.
+
+**Verify output (50 synthetic images)**
+```
+Scanned    : 50 images from .tmp_synth
+Bands      : positive=0  review=0  negative=50
+Errors     : 0
+Elapsed    : 1.19 s
+Throughput : 41.93 img/s
+ETA 10,000 : 3m 58s
+```
+`pytest -q` -> `23 passed`.
+
+**Baseline for later phases:** ~42 img/s for walk + decode + resize on 800x600 PNGs, i.e. ~4 min for 10k images. Roughly the whole 12 h budget from D-005 remains available to the detection signals.
+
+**Deviations / notes**
+- `BRAND_TERMS` intentionally left as the `ACME` placeholder even though real logo files exist in `logo/` - the real terms are the user's homework and the plan specified the placeholder.
+- `tools/check_dataset.py` bootstraps `sys.path` itself so it runs as a plain script from the repo root.
+- Console output kept ASCII-only: the Windows console codepage mangles em dashes.
+- `.gitignore` extended with `.tmp_*/` for the verify-command scratch folders.
+
+**Follow-ups for the next phase**
+- phase02 fills `run_scan` with the OCR signal and adds the `benchmark` subcommand; `ResultRow.method` / `confidence` / box columns are already in place for it.
+- Synthetic positives currently vary scale, rotation, position and opacity only. Blur, JPEG artifacts and occlusion are worth adding when the baseline starts passing too easily.

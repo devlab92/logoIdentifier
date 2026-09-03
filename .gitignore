@@ -27,3 +27,6 @@ Thumbs.db
 
 # Keep folder placeholders
 !**/.gitkeep
+
+# Scratch output from the phase verify commands
+.tmp_*/

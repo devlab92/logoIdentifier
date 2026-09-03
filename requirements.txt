@@ -1,0 +1,7 @@
+# LogoScanner runtime + test dependencies (CPU-only, offline-capable).
+# Pinned versions recorded in docs/SETUP.md.
+opencv-python
+numpy
+rapidfuzz
+tqdm
+pytest
