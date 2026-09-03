@@ -12,4 +12,4 @@
 ## History
 | Phase | Status | Finished | Commit | Notes |
 |---|---|---|---|---|
-| phase00 bootstrap | done | 2026-09-03 | <hash> | scaffold |
+| phase00 bootstrap | done | 2026-09-03 | 6529e95 | scaffold |
