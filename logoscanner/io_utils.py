@@ -1,7 +1,8 @@
 """Filesystem walking and safe image loading.
 
 Nothing in here raises on bad input: a file that cannot be decoded comes back
-as an error string so the scan can record it and keep going.
+as an error string so the scan can record it and keep going. Formats OpenCV
+cannot read (AVIF, notably) fall back to Pillow - see D-016.
 """
 
 from __future__ import annotations
@@ -56,11 +57,32 @@ def load_image(path: str | Path, max_side: int | None = MAX_SIDE):
 
     image = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if image is None:
+        image = _decode_with_pillow(path)
+    if image is None:
         return None, "decode failed (corrupt or unsupported format)"
 
     if max_side:
         image = downscale(image, max_side)
     return image, None
+
+
+def _decode_with_pillow(path: Path) -> np.ndarray | None:
+    """Second-chance decode for formats OpenCV lacks, returned as BGR.
+
+    Pillow (already present as a RapidOCR dependency) reads AVIF, which the
+    opencv-python wheels do not. Silently skipping such files would hide real
+    logos, so we spend the extra attempt rather than lose them.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(path) as handle:
+            rgb = np.asarray(handle.convert("RGB"))
+    except Exception:
+        return None
+    if rgb.size == 0:
+        return None
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
 def downscale(image: np.ndarray, max_side: int = MAX_SIDE) -> np.ndarray:

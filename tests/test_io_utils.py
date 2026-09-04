@@ -74,3 +74,25 @@ def test_load_image_downscales_large_input(tmp_path):
     image, error = load_image(path, max_side=1000)
     assert error is None
     assert max(image.shape[:2]) == 1000
+
+
+def test_avif_is_walked_and_decoded_through_the_pillow_fallback(tmp_path):
+    """OpenCV cannot read AVIF; the fallback must, or those images vanish."""
+    from PIL import Image
+
+    from logoscanner.io_utils import iter_images
+
+    path = tmp_path / "mark.avif"
+    Image.fromarray(np.full((40, 60, 3), 200, dtype=np.uint8)).save(path)
+
+    assert list(iter_images(tmp_path)) == [path]
+    assert cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR) is None
+    image, error = load_image(path)
+    assert error is None and image.shape == (40, 60, 3)
+
+
+def test_the_fallback_still_reports_genuinely_broken_files(tmp_path):
+    path = tmp_path / "broken.avif"
+    path.write_bytes(b"definitely not an avif")
+    image, error = load_image(path)
+    assert image is None and "decode failed" in error

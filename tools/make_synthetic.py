@@ -2,24 +2,38 @@
 
 Backgrounds are procedural (solid / gradient / noise / shapes / text); positives
 get `tests/assets/dummy_logo.png` pasted at a random scale, position, small
-rotation and opacity. Output layout mirrors `data/labeled/`:
+rotation and opacity. With `--with-text`, a share of the positives also carry
+the first `BRAND_TERMS` entry rendered as readable text (varied font, size and
+plaque colour) so the OCR signal can be exercised without company images.
+Output layout mirrors `data/labeled/`:
 
     <out>/positive/pos_0001.png
     <out>/negative/neg_0001.png
 
 Usage:
     python tools/make_synthetic.py --out .tmp_synth --count 50 --positive-ratio 0.5
+    python tools/make_synthetic.py --out .tmp_synth --count 20 --with-text
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from logoscanner.config import BRAND_TERMS  # noqa: E402  (needs the path above)
+
 DEFAULT_LOGO = Path("tests/assets/dummy_logo.png")
+BRAND_FONTS = (
+    cv2.FONT_HERSHEY_SIMPLEX,
+    cv2.FONT_HERSHEY_DUPLEX,
+    cv2.FONT_HERSHEY_TRIPLEX,
+    cv2.FONT_HERSHEY_COMPLEX,
+)
 BACKGROUND_KINDS = ("solid", "gradient", "noise", "shapes", "text")
 _WORDS = ("REPORT", "SUMMARY", "DATA", "FIGURE", "NOTES", "DRAFT", "TOTAL", "INDEX")
 
@@ -125,6 +139,44 @@ def paste_logo(rng, background: np.ndarray, logo: np.ndarray) -> np.ndarray:
     return out
 
 
+def draw_brand_text(rng, image: np.ndarray, term: str | None = None) -> np.ndarray:
+    """Stamp the brand term onto a contrasting plaque so OCR can read it.
+
+    The plaque (light box, dark glyphs, or the inverse) stands in for the flat,
+    high-contrast lockups the real logo appears in; without it, text landing on
+    procedural noise is unreadable and the synthetic set would test nothing.
+    """
+    term = (term or (BRAND_TERMS[0] if BRAND_TERMS else "BRAND")).strip()
+    height, width = image.shape[:2]
+    font = BRAND_FONTS[int(rng.integers(0, len(BRAND_FONTS)))]
+    thickness = int(rng.integers(2, 4))
+
+    scale = float(rng.uniform(0.8, 2.4))
+    (text_w, text_h), baseline = cv2.getTextSize(term, font, scale, thickness)
+    # Shrink until the plaque fits, so small canvases still get legible text.
+    while (text_w + 24 > width or text_h + baseline + 24 > height) and scale > 0.4:
+        scale *= 0.8
+        (text_w, text_h), baseline = cv2.getTextSize(term, font, scale, thickness)
+
+    pad = max(6, int(text_h * 0.35))
+    box_w, box_h = text_w + 2 * pad, text_h + baseline + 2 * pad
+    x = int(rng.integers(0, max(1, width - box_w + 1)))
+    y = int(rng.integers(0, max(1, height - box_h + 1)))
+
+    dark = bool(rng.random() < 0.5)
+    plate = tuple(int(c) for c in rng.integers(0, 46, size=3)) if dark else tuple(
+        int(c) for c in rng.integers(210, 256, size=3)
+    )
+    ink = (235, 235, 235) if dark else (20, 20, 20)
+
+    out = image.copy()
+    cv2.rectangle(out, (x, y), (x + box_w, y + box_h), plate, -1)
+    cv2.putText(
+        out, term, (x + pad, y + pad + text_h), font, scale, ink, thickness, cv2.LINE_AA
+    )
+    return out
+
+
 def _write(image: np.ndarray, path: Path) -> None:
     ok, buf = cv2.imencode(path.suffix, image)
     if not ok:
@@ -139,8 +191,13 @@ def generate(
     logo_path: str | Path = DEFAULT_LOGO,
     size: tuple[int, int] = (600, 800),
     seed: int | None = None,
+    text_ratio: float = 0.0,
 ) -> dict[str, int]:
-    """Write `count` images split by `positive_ratio`. Returns per-class counts."""
+    """Write `count` images split by `positive_ratio`. Returns per-class counts.
+
+    `text_ratio` is the share of positives that additionally carry the brand
+    name as readable text (0 = none, 1 = all).
+    """
     rng = np.random.default_rng(seed)
     out_dir = Path(out_dir)
     pos_dir, neg_dir = out_dir / "positive", out_dir / "negative"
@@ -163,8 +220,11 @@ def generate(
             raise ValueError(f"{logo_path} is not a readable RGBA image")
 
     height, width = size
+    n_text = int(round(n_positive * max(0.0, min(1.0, text_ratio))))
     for index in range(n_positive):
         image = paste_logo(rng, make_background(rng, height, width), logo)
+        if index < n_text:
+            image = draw_brand_text(rng, image)
         _write(image, pos_dir / f"pos_{index + 1:04d}.png")
     for index in range(n_negative):
         _write(make_background(rng, height, width), neg_dir / f"neg_{index + 1:04d}.png")
@@ -181,6 +241,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--width", type=int, default=800)
     parser.add_argument("--height", type=int, default=600)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--with-text",
+        dest="text_ratio",
+        type=float,
+        nargs="?",
+        const=0.6,
+        default=0.0,
+        help="share of positives that also carry the brand name as text (bare flag: 0.6)",
+    )
     args = parser.parse_args(argv)
 
     if not 0.0 <= args.positive_ratio <= 1.0:
@@ -189,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
 
     counts = generate(
         args.out, args.count, args.positive_ratio, args.logo,
-        size=(args.height, args.width), seed=args.seed,
+        size=(args.height, args.width), seed=args.seed, text_ratio=args.text_ratio,
     )
     print(f"wrote {counts['positive']} positive + {counts['negative']} negative -> {args.out}")
     return 0

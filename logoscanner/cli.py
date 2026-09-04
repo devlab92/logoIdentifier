@@ -1,7 +1,7 @@
 """Command line interface: `python -m logoscanner <command>`.
 
-phase01 ships `scan` (walk + load + report, no detection yet) and `version`.
-Later phases add `benchmark` (phase02) and `calibrate` (phase04).
+phase02 ships `scan` (walk + load + signals + report), `benchmark` (per-signal
+quality on a labeled set) and `version`. phase04 adds `calibrate`.
 """
 
 from __future__ import annotations
@@ -13,8 +13,10 @@ from pathlib import Path
 from tqdm import tqdm
 
 from logoscanner import __version__
-from logoscanner import config
+from logoscanner import config, signals
+from logoscanner.benchmark import run_benchmark
 from logoscanner.io_utils import iter_images, load_image
+from logoscanner.pipeline import build_pipeline
 from logoscanner.results import (
     CSV_NAME,
     JSON_NAME,
@@ -30,14 +32,17 @@ def run_scan(
     output_dir: str | Path,
     limit: int | None = None,
     progress: bool = True,
+    signals=None,
 ) -> dict:
     """Scan `input_dir`, write CSV + JSON into `output_dir`, return the summary.
 
-    phase01 has no detector, so every readable image is scored 0.0 / negative;
-    the point is the walk, the safe load and the throughput measurement.
+    Every readable image goes through the signal pipeline; the strongest signal
+    sets confidence, band, box and `method`. Bands are provisional until
+    phase04 calibrates the thresholds in `config`.
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
+    pipeline = build_pipeline(signals)
 
     paths = list(iter_images(input_dir))
     if limit is not None:
@@ -54,20 +59,12 @@ def run_scan(
         if error:
             rows.append(ResultRow(filename=relative, error=error, method="none"))
             continue
-        # No signals yet — phase02 onwards fills confidence / band / box.
-        rows.append(
-            ResultRow(
-                filename=relative,
-                contains_logo=False,
-                band=config.BAND_NEGATIVE,
-                confidence=0.0,
-                method="none",
-            )
-        )
+        rows.append(pipeline.run(image).to_row(relative))
     seconds = time.perf_counter() - start
 
     summary = summarize(rows, seconds)
     summary["input"] = str(input_dir)
+    summary["signals"] = list(pipeline.names)
     write_csv(rows, output_dir / CSV_NAME)
     write_json(summary, output_dir / JSON_NAME)
     return summary
@@ -92,6 +89,7 @@ def print_report(summary: dict, output_dir: Path) -> None:
     bands = summary["bands"]
     print()
     print(f"Scanned    : {summary['images']} images from {summary['input']}")
+    print(f"Signals    : " + ", ".join(summary.get("signals") or ["none"]))
     print(f"Bands      : " + "  ".join(f"{name}={bands.get(name, 0)}" for name in config.BANDS))
     print(f"Errors     : {summary['errors']}")
     print(f"Elapsed    : {summary['seconds']:.2f} s")
@@ -99,6 +97,18 @@ def print_report(summary: dict, output_dir: Path) -> None:
     print(f"ETA 10,000 : {_format_duration(summary['eta_10k_seconds'])}")
     print(f"Report     : {output_dir / CSV_NAME}")
     print(f"Summary    : {output_dir / JSON_NAME}")
+
+
+def _parse_signals(value: str | None) -> tuple[str, ...] | None:
+    """`"ocr,sift"` -> `("ocr", "sift")`.
+
+    A missing flag returns None, which keeps `config.ENABLED_SIGNALS`; an empty
+    string returns `()`, which runs no signal at all (useful for timing the
+    walk and the decode on their own).
+    """
+    if value is None:
+        return None
+    return tuple(name.strip() for name in value.split(",") if name.strip())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -113,6 +123,25 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--output", required=True, help="folder for results.csv / summary.json")
     scan.add_argument("--limit", type=int, default=None, help="stop after N images")
     scan.add_argument("--no-progress", action="store_true", help="hide the progress bar")
+    scan.add_argument(
+        "--signals",
+        default=None,
+        help=f"comma-separated signals (default: {','.join(config.ENABLED_SIGNALS)})",
+    )
+
+    bench = sub.add_parser("benchmark", help="measure signal quality on a labeled set")
+    bench.add_argument("--labeled", required=True, help="folder with positive/ and negative/")
+    bench.add_argument(
+        "--signals",
+        default=None,
+        help=f"comma-separated signals (default: {','.join(config.ENABLED_SIGNALS)})",
+    )
+    bench.add_argument("--limit", type=int, default=None, help="stop after N images per class")
+    bench.add_argument("--no-progress", action="store_true", help="hide the progress bar")
+    bench.add_argument(
+        "--no-record", action="store_true", help="do not append a row to docs/BENCHMARKS.md"
+    )
+    bench.add_argument("--note", default="", help="note stored with the BENCHMARKS row")
 
     sub.add_parser("version", help="print the version and exit")
     return parser
@@ -125,6 +154,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"logoscanner {__version__}")
         return 0
 
+    signal_names = _parse_signals(getattr(args, "signals", None))
+    if signal_names:
+        unknown = [name for name in signal_names if name not in signals.available()]
+        if unknown:
+            print(
+                f"error: unknown signal(s): {', '.join(unknown)}; "
+                f"available: {', '.join(signals.available())}"
+            )
+            return 2
+
     if args.command == "scan":
         input_dir = Path(args.input)
         if not input_dir.is_dir():
@@ -132,9 +171,28 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         output_dir = Path(args.output)
         summary = run_scan(
-            input_dir, output_dir, limit=args.limit, progress=not args.no_progress
+            input_dir,
+            output_dir,
+            limit=args.limit,
+            progress=not args.no_progress,
+            signals=signal_names,
         )
         print_report(summary, output_dir)
+        return 0
+
+    if args.command == "benchmark":
+        labeled_dir = Path(args.labeled)
+        if not labeled_dir.is_dir():
+            print(f"error: labeled folder not found: {labeled_dir}")
+            return 2
+        run_benchmark(
+            labeled_dir,
+            signal_names,
+            limit=args.limit,
+            progress=not args.no_progress,
+            write_docs=not args.no_record,
+            note=args.note,
+        )
         return 0
 
     return 2  # pragma: no cover - argparse rejects unknown commands first

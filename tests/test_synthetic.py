@@ -55,3 +55,41 @@ def test_positive_differs_from_its_background(tmp_path, dummy_logo_path):
     pasted = make_synthetic.paste_logo(rng, background, logo)
     assert pasted.shape == background.shape
     assert not np.array_equal(pasted, background)
+
+
+def test_with_text_stamps_the_brand_on_the_requested_share(tmp_path, dummy_logo_path):
+    make_synthetic.generate(
+        tmp_path, count=20, positive_ratio=0.5, logo_path=dummy_logo_path,
+        size=(240, 420), seed=13, text_ratio=0.6,
+    )
+    from logoscanner.ocr import OcrSignal
+
+    signal = OcrSignal()
+    hits = 0
+    for path in sorted(iter_images(tmp_path / "positive")):
+        image, error = load_image(path)
+        assert error is None
+        if signal.run(image).score > 0.5:
+            hits += 1
+    assert hits == 6  # round(10 * 0.6) positives carry readable brand text
+
+
+def test_text_ratio_defaults_to_off(tmp_path, dummy_logo_path):
+    make_synthetic.generate(
+        tmp_path, count=2, positive_ratio=1.0, logo_path=dummy_logo_path,
+        size=(240, 420), seed=13,
+    )
+    from logoscanner.ocr import OcrSignal
+
+    signal = OcrSignal()
+    for path in iter_images(tmp_path / "positive"):
+        image, _ = load_image(path)
+        assert signal.run(image).score == 0.0
+
+
+def test_draw_brand_text_fits_and_changes_the_image():
+    rng = np.random.default_rng(5)
+    background = make_synthetic.make_background(rng, 120, 200)
+    stamped = make_synthetic.draw_brand_text(rng, background, "BRANDNAME")
+    assert stamped.shape == background.shape
+    assert not np.array_equal(stamped, background)

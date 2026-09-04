@@ -5,3 +5,8 @@ numpy
 rapidfuzz
 tqdm
 pytest
+# OCR signal (phase02). Ships its own ONNX models, so nothing downloads at runtime.
+rapidocr-onnxruntime
+# Second-chance decoder for formats OpenCV lacks (AVIF). Already pulled in by
+# rapidocr-onnxruntime; listed because we import it directly (D-016).
+pillow

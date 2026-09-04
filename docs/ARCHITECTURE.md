@@ -3,17 +3,25 @@
 > Keep this file matching reality. Update on any behavioral change.
 
 ## Current state
-**phase01 done: skeleton, no detection.** `python -m logoscanner scan` walks a folder
+**phase02 done: the OCR signal is live.** `python -m logoscanner scan` walks a folder
 (`io_utils.iter_images`), loads each image safely (`io_utils.load_image`, downscaled to
-`config.MAX_SIDE`, decode failures recorded not raised), emits one `results.ResultRow` per
-image and writes `results.csv` + `summary.json`, then prints throughput and the ETA for
-10,000 images. Every image currently scores `0.0 / negative / method=none` - the signal
-modules below land from phase02. Synthetic data (`tools/make_synthetic.py`) stands in for
-the real labeled set until the user fills `data/labeled/`.
+`config.MAX_SIDE`, decode failures recorded not raised, AVIF via a Pillow fallback), runs
+every signal in `config.ENABLED_SIGNALS` through `pipeline.Pipeline`, and writes one
+`results.ResultRow` per image into `results.csv` + `summary.json`.
 
-Measured phase01 baseline: ~42 img/s on 800x600 PNGs (walk + decode + resize only),
-i.e. ~4 minutes for 10k. The 12 h budget in Key principles is therefore almost entirely
-available to the detection signals.
+Only the OCR signal exists so far: `ocr.OcrSignal` reads text with RapidOCR and fuzzy-matches
+each line against `config.BRAND_TERMS` (D-013), scoring `fuzz/100 x ocr_confidence` and
+returning the winning line's box. `pipeline.decide` applies the OR rule over signals and bands
+the winner with `config.band_for`; those thresholds are provisional (0.85 / 0.60) until phase04
+calibrates them. SIFT lands in phase03.
+
+`python -m logoscanner benchmark --labeled <dir> --signals ocr` scores `positive/` + `negative/`,
+sweeps a coarse (review, positive) threshold grid and prints precision / catch-recall / review
+share per signal, appending a row to `docs/BENCHMARKS.md`. Operating points are picked
+recall-first (D-014) and reported only - nothing writes back into `config` yet.
+
+Measured: phase01 baseline was ~42 img/s for walk + decode + resize alone. OCR dominates now
+(see BENCHMARKS for the current figure), so the 10k ETA is set by the OCR cost per image.
 
 Target design below.
 
@@ -34,3 +42,5 @@ image ──► OCR signal   (RapidOCR + fuzzy brand-term match)      ─┐
 
 ## Data flow & artifacts
 `input/` → scanner walk → per-image signals → decision → incremental `output/results.csv` + `output/.progress.jsonl` (resume) → final `results.json` summary + `crops/`, `detected/`, `review/`.
+Incremental writing, resume and the crop/detected/review folders are still ahead; phase02 writes
+the CSV and JSON once at the end of the run.
