@@ -20,7 +20,8 @@ gate failed and phase05 exists:
 `Screen-Shot-2020-09-23-at-8.33.59-PM.jpg`, `Untitled-1-1-1.png`, `ZPE-Systems-Frank-Basso.webp`.
 
 ## User homework (blockers owned by the human)
-- [ ] Create GitHub repo, add remote, push
+- [~] GitHub repo created and `origin` set (`devlab92/logoIdentifier`); **push still pending** -
+      run `git push -u origin main` yourself (the agent's push is blocked by permissions)
 - [x] Set the real `BRAND_TERMS` in `logoscanner/config.py` (`ZPE`, `ZPE Systems`)
 - [x] Label real images into `data/labeled/positive|negative/` (100 / 158, all now readable)
 - [x] Confirm `logo/` holds the variants SIFT should match (2 files, both full wordmarks)
