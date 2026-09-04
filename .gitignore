@@ -30,3 +30,7 @@ Thumbs.db
 
 # Scratch output from the phase verify commands
 .tmp_*/
+
+# Collected WordPress originals (side tool)
+input/wp_originals/
+input/wp_originals_manifest.csv
