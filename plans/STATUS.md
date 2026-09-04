@@ -34,4 +34,4 @@ Bands are still provisional (0.85 / 0.60) until phase04.
 | phase00 bootstrap | done | 2026-09-03 | 6529e95 | scaffold |
 | phase01 foundation | done | 2026-09-03 | de93fb4 | CLI skeleton, safe IO, CSV/JSON reports, synthetic data tools, 23 tests; baseline 42 img/s |
 | phase02 OCR signal | done | 2026-09-04 | b097bd5 | RapidOCR signal, signal registry, pipeline, `benchmark` command, 97 tests; catch-recall 0.930 / precision 0.875 |
-| phase03 SIFT signal | done | 2026-09-04 | (pending) | keypoint match + homography verification, naive-OR benchmark row, 122 tests; ocr+sift catch-recall 0.940 / precision 0.875 |
+| phase03 SIFT signal | done | 2026-09-04 | 052a2cf | keypoint match + homography verification, naive-OR benchmark row, 122 tests; ocr+sift catch-recall 0.940 / precision 0.875 |
