@@ -23,7 +23,9 @@
 - Tests: `test_decision.py`, `test_metrics.py`, `test_calibrate.py` + `calibrate` CLI coverage.
   Suite 122 -> 161 green.
 - Docs: ARCHITECTURE (bands + calibration flow), CODEMAP, SETUP (command + outputs + phase04
-  smoke test), BENCHMARKS (calibrated row), D-021 / D-022 / D-023.
+  smoke test), BENCHMARKS (calibrated row + post-calibration sweep rows), D-021 / D-022 / D-023.
+- Throughput this session is not comparable to phase03's: every phase04 run shared the CPU with
+  the test suite (0.21-0.29 img/s vs 0.62). No performance work was done or intended.
 
 ## 2026-09-04 - phase03
 - `logoscanner/keypoints.py`: `SiftSignal` (registered as `"sift"`). SIFT descriptors are computed

@@ -39,4 +39,4 @@ gate failed and phase05 exists:
 | phase01 foundation | done | 2026-09-03 | de93fb4 | CLI skeleton, safe IO, CSV/JSON reports, synthetic data tools, 23 tests; baseline 42 img/s |
 | phase02 OCR signal | done | 2026-09-04 | b097bd5 | RapidOCR signal, signal registry, pipeline, `benchmark` command, 97 tests; catch-recall 0.930 / precision 0.875 |
 | phase03 SIFT signal | done | 2026-09-04 | 052a2cf | keypoint match + homography verification, naive-OR benchmark row, 122 tests; ocr+sift catch-recall 0.940 / precision 0.875 |
-| phase04 decision + calibration + GATE | done | 2026-09-04 | (pending) | per-signal thresholds, `calibrate` command, 161 tests; calibrated catch-recall 0.940 / precision 0.882 / review 7.0%; **gate FAILED -> phase05** |
+| phase04 decision + calibration + GATE | done | 2026-09-04 | 92e9185 | per-signal thresholds, `calibrate` command, 161 tests; calibrated catch-recall 0.940 / precision 0.882 / review 7.0%; **gate FAILED -> phase05** |
