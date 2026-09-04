@@ -7,26 +7,21 @@ pairs. The chosen operating point is *recall-first* (D-014): maximise
 catch-recall (positives landing in positive OR review), and only then prefer
 precision and a smaller review pile.
 
-phase04 replaces this manual read with real calibration; phase02 only needs the
-numbers on the table.
+The sweep answers "what could this signal do on its own"; `calibrate` (phase04)
+is what actually chooses the thresholds the scanner ships with, per signal.
 """
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from tqdm import tqdm
-
 from logoscanner import config
-from logoscanner.io_utils import iter_images, load_image
-from logoscanner.signals import build_all
+from logoscanner.metrics import CLASS_DIRS, score_images  # noqa: F401 (CLASS_DIRS re-export)
 
-CLASS_DIRS = ("positive", "negative")
 # Stamped into every BENCHMARKS row; bump it when a phase changes the signals.
-PHASE = "phase03"
+PHASE = "phase04"
 # Coarse grid, 0.05 steps. Fine enough to see the shape, cheap enough to print.
 GRID = tuple(round(0.05 * i, 2) for i in range(1, 20))
 
@@ -70,48 +65,18 @@ def score_labeled(
 ) -> tuple[dict[str, SignalScores], dict]:
     """Score `positive/` and `negative/` with each signal; return scores + meta.
 
-    Images are loaded once and shown to every signal, so adding a signal costs
-    only that signal's own time.
+    Thin adapter over `metrics.score_images` (one load per image, every signal
+    sees it) that reshapes the per-file records into the per-signal score
+    distributions the sweep works on.
     """
-    labeled_dir = Path(labeled_dir)
-    signals = build_all(signal_names)
-    names = tuple(signal.name for signal in signals)
+    records, meta = score_images(labeled_dir, signal_names, limit=limit, progress=progress)
+    names = tuple(meta["signals"])
     scores = {name: SignalScores(name) for name in names}
-
-    jobs: list[tuple[Path, str]] = []
-    for label in CLASS_DIRS:
-        paths = list(iter_images(labeled_dir / label))
-        if limit is not None:
-            paths = paths[:limit]
-        jobs.extend((path, label) for path in paths)
-
-    errors: list[str] = []
-    start = time.perf_counter()
-    for path, label in tqdm(jobs, desc="benchmark", unit="img", disable=not progress):
-        image, error = load_image(path)
-        if error:
-            errors.append(f"{path.name}: {error}")
-            continue
-        for signal in signals:
-            signal_start = time.perf_counter()
-            result = signal.run(image)
-            entry = scores[signal.name]
-            entry.seconds += time.perf_counter() - signal_start
-            getattr(entry, label).append(result.score)
-    seconds = time.perf_counter() - start
-
-    scored = len(jobs) - len(errors)
-    first = scores[names[0]] if names else None
-    meta = {
-        "labeled": str(labeled_dir),
-        "signals": list(names),
-        "images": scored,
-        "positives": len(first.positive) if first else 0,
-        "negatives": len(first.negative) if first else 0,
-        "errors": errors,
-        "seconds": seconds,
-        "images_per_second": scored / seconds if seconds > 0 else 0.0,
-    }
+    for name in names:
+        scores[name].seconds = meta["signal_seconds"].get(name, 0.0)
+    for record in records:
+        for name in names:
+            getattr(scores[name], record.label).append(record.scores.get(name, 0.0))
     return scores, meta
 
 

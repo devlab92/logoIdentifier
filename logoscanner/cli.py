@@ -1,7 +1,8 @@
 """Command line interface: `python -m logoscanner <command>`.
 
-phase02 ships `scan` (walk + load + signals + report), `benchmark` (per-signal
-quality on a labeled set) and `version`. phase04 adds `calibrate`.
+`scan` walks a folder and writes the reports, `benchmark` measures each signal
+on a labeled set, `calibrate` (phase04) tunes the per-signal thresholds on that
+same set and writes them into `config.py`, and `version` prints the version.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from tqdm import tqdm
 from logoscanner import __version__
 from logoscanner import config, signals
 from logoscanner.benchmark import run_benchmark
+from logoscanner.calibrate import run_calibration
 from logoscanner.io_utils import iter_images, load_image
 from logoscanner.pipeline import build_pipeline
 from logoscanner.results import (
@@ -36,9 +38,8 @@ def run_scan(
 ) -> dict:
     """Scan `input_dir`, write CSV + JSON into `output_dir`, return the summary.
 
-    Every readable image goes through the signal pipeline; the strongest signal
-    sets confidence, band, box and `method`. Bands are provisional until
-    phase04 calibrates the thresholds in `config`.
+    Every readable image goes through the signal pipeline; `decision.decide`
+    bands it against the calibrated per-signal thresholds in `config`.
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -143,6 +144,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench.add_argument("--note", default="", help="note stored with the BENCHMARKS row")
 
+    cal = sub.add_parser(
+        "calibrate", help="tune the per-signal thresholds on a labeled set"
+    )
+    cal.add_argument("--labeled", required=True, help="folder with positive/ and negative/")
+    cal.add_argument(
+        "--signals",
+        default=None,
+        help=f"comma-separated signals (default: {','.join(config.ENABLED_SIGNALS)})",
+    )
+    cal.add_argument("--limit", type=int, default=None, help="stop after N images per class")
+    cal.add_argument("--no-progress", action="store_true", help="hide the progress bar")
+    cal.add_argument(
+        "--no-apply",
+        action="store_true",
+        help="report the thresholds but do not write them into config.py",
+    )
+
     sub.add_parser("version", help="print the version and exit")
     return parser
 
@@ -192,6 +210,20 @@ def main(argv: list[str] | None = None) -> int:
             progress=not args.no_progress,
             write_docs=not args.no_record,
             note=args.note,
+        )
+        return 0
+
+    if args.command == "calibrate":
+        labeled_dir = Path(args.labeled)
+        if not labeled_dir.is_dir():
+            print(f"error: labeled folder not found: {labeled_dir}")
+            return 2
+        run_calibration(
+            labeled_dir,
+            signal_names,
+            limit=args.limit,
+            progress=not args.no_progress,
+            apply=not args.no_apply,
         )
         return 0
 

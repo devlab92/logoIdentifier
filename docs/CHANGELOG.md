@@ -2,6 +2,29 @@
 
 > Newest first. One dated block per working session that changed the repo.
 
+## 2026-09-04 - phase04: decision engine, calibration & THE GATE
+- `logoscanner/decision.py`: per-signal `(weak, strong)` thresholds, OR over the band each signal
+  claims (not over raw scores), normalized confidence anchored on `REVIEW_THRESHOLD` /
+  `POSITIVE_THRESHOLD`, `method` naming every winning signal (D-021). `pipeline.py` is now
+  orchestration only and re-exports `decide` / `Decision`; the provisional phase02 rule is gone.
+- `logoscanner/metrics.py`: `score_images` (one pass, per-file scores kept) + `evaluate`
+  (precision, catch-recall, review share, confusion counts, per-signal wins, miss filenames).
+  `benchmark.score_labeled` is now an adapter over it, so the repo has one loading loop.
+- `logoscanner/calibrate.py` + `python -m logoscanner calibrate`: vectorised grid search over
+  every signal's threshold pair (44,100 combinations), objective = max precision subject to
+  catch-recall >= 0.97 and review <= 10%, relaxed to the attainable ceiling when unreachable
+  (D-022). Writes `output/calibration.json`, rewrites the marked block in `config.py`, prints the
+  gate verdict, and writes `output/gate_failures.txt` when it fails.
+- Calibrated on the real set (100/158): OCR 0.60/0.95, SIFT 0.45/0.45 → precision **0.882**,
+  catch-recall **0.940**, review share **7.0%**, 6 misses (D-023).
+- **GATE FAILED** on catch-recall (0.940 < 0.97). The 6 misses score 0 on *both* signals - no
+  threshold can recover them - so phase05 (region proposals + embeddings) runs; phase06 stays
+  conditional on it.
+- Tests: `test_decision.py`, `test_metrics.py`, `test_calibrate.py` + `calibrate` CLI coverage.
+  Suite 122 -> 161 green.
+- Docs: ARCHITECTURE (bands + calibration flow), CODEMAP, SETUP (command + outputs + phase04
+  smoke test), BENCHMARKS (calibrated row), D-021 / D-022 / D-023.
+
 ## 2026-09-04 - phase03
 - `logoscanner/keypoints.py`: `SiftSignal` (registered as `"sift"`). SIFT descriptors are computed
   once per variant in `logo/` (grayscale, alpha-aware, tiny variants upscaled to 300 px), matched

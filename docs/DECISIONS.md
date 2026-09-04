@@ -127,3 +127,57 @@ default SIFT signal is inert in tests and no company asset can leak into a test 
 Tests that need templates opt in with the `fake_logo_dir` fixture, which holds only the committed
 fake mark. The side effect is that one CLI test prints the "no usable logo variants" warning -
 that is the graceful-degradation path being exercised, not a failure.
+
+## D-021 - Thresholds are per signal, and confidence is a normalized scale (phase04)
+One pair of global bands cannot serve two signals whose scores mean different things: on the
+labeled set an OCR score of 0.7 is a doubtful read, while a SIFT score of 0.7 (17+ verified
+inliers) is a certainty. `decision.decide` therefore gives every signal its own
+`(weak, strong)` pair, asks each what band *it* claims, and takes the best band any of them
+claims - the OR rule of D-003 moved one level up, from raw scores to bands. Taking a raw `max`
+instead would have let a lukewarm OCR read outrank a conclusive SIFT match.
+
+Because raw scores are no longer comparable, the reported `confidence` is each score mapped onto
+one shared scale: `weak` lands on `REVIEW_THRESHOLD` (0.50), `strong` on `POSITIVE_THRESHOLD`
+(0.85), piecewise-linear in between and out to 0 and 1. It is monotonic in the raw score and
+comparable across signals, but it is **not** a probability - it says "how far past its own bar
+this signal got", nothing more. The two config constants survive as the anchors of that scale, so
+`config.band_for(confidence)` still agrees with the band the engine assigned. `method` lists every
+signal that claimed the winning band, strongest first (`ocr+sift`), and the box comes from the
+strongest winner that could localise anything.
+
+## D-022 - Calibration relaxes an unreachable recall target instead of hiding it (phase04)
+The objective is "maximise precision subject to catch-recall >= 0.97 and review share <= 10%".
+When a labeled set contains positives that score 0 on *every* signal, no threshold can reach that
+recall - the constraint set is empty and any naive implementation either crashes or silently
+returns the last point it looked at. `calibrate.search` instead keeps the review-share cap, aims
+at the best catch-recall the scores actually allow, maximises precision there, and reports
+`feasible: false` plus the attainable ceiling. That is precisely the signal the phase04 gate
+needs: thresholds are not the problem, the detector is blind to those images, so the answer is a
+new signal (phase05), not a new number.
+
+## D-023 - Calibrated thresholds and the phase04 gate verdict: FAILED (2026-09-04)
+Calibrated on the real labeled set (100 positive / 158 negative, `ocr,sift`, 44,100 threshold
+combinations, `output/calibration.json`):
+
+| signal | weak (review) | strong (positive) |
+|---|---|---|
+| ocr | 0.60 | 0.95 |
+| sift | 0.45 | 0.45 |
+
+Result: precision **0.882**, catch-recall **0.940**, review share **7.0%** (82 positives flagged,
+12 to review, 6 missed; 11 negatives flagged, 6 to review). OCR decided 105 of the 111 flagged or
+reviewed images, SIFT 6.
+
+SIFT's weak and strong thresholds coincide on purpose: the search found no value in a SIFT
+"review" band. A homography-verified match at 0.45 (11+ inliers) is right often enough to be
+called `positive` outright, and everything below it is noise that would only inflate the review
+pile - so SIFT either flags or stays silent, and the review band is entirely OCR's.
+
+**GATE: FAILED.** Review share passes (7.0% <= 10%) but catch-recall 0.940 misses the 0.97 target,
+and no threshold can fix it: 6 positives score exactly 0 on *both* signals (listed in
+`output/gate_failures.txt`) - `fgJCL84Y.jpg`, `Networking-Field-Day-9123_400x250.jpg`,
+`NSCP-CE-Diagram.png`, `Screen-Shot-2020-09-23-at-8.33.59-PM.jpg`, `Untitled-1-1-1.png`,
+`ZPE-Systems-Frank-Basso.webp`. They carry neither readable brand text nor matchable symbol
+geometry, so the attainable ceiling is 0.940 (D-022) and the answer is a new signal.
+**phase05 (region proposals + embedding similarity) runs.**
+

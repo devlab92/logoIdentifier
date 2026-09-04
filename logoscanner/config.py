@@ -74,16 +74,44 @@ BAND_REVIEW = "review"
 BAND_NEGATIVE = "negative"
 BANDS = (BAND_POSITIVE, BAND_REVIEW, BAND_NEGATIVE)
 
-# Provisional (phase02) — calibrated on the labeled set in phase04.
-# confidence >= POSITIVE_THRESHOLD          -> positive
-# REVIEW_THRESHOLD <= confidence < POSITIVE -> review
-# confidence <  REVIEW_THRESHOLD            -> negative
+# Anchors of the *normalized* confidence scale (D-021). Raw signal scores are
+# not comparable across signals, so `decision.normalize` maps each signal's
+# score onto one common scale where its weak threshold lands on
+# REVIEW_THRESHOLD and its strong threshold on POSITIVE_THRESHOLD. The mapping
+# is monotonic, not a probability, and keeps `band_for(confidence)` in step
+# with the band the decision engine actually assigned.
 POSITIVE_THRESHOLD = 0.85
-REVIEW_THRESHOLD = 0.60
+REVIEW_THRESHOLD = 0.50
+
+# Per-signal decision thresholds: score >= strong -> positive, >= weak ->
+# review, else negative (`decision.decide`). Signals with no entry here fall
+# back to FALLBACK_THRESHOLDS.
+# --- calibrated thresholds (written by `logoscanner calibrate`) ------------
+# Calibrated on the labeled set, 2026-09-04.
+SIGNAL_THRESHOLDS: dict[str, tuple[float, float]] = {
+    # signal: (weak, strong)
+    "ocr": (0.60, 0.95),
+    "sift": (0.45, 0.45),
+}
+# --- end calibrated thresholds ---------------------------------------------
+
+# Used for any signal missing from SIGNAL_THRESHOLDS (a brand-new detector
+# benchmarked before its own calibration run).
+FALLBACK_THRESHOLDS: tuple[float, float] = (0.60, 0.85)
+
+# --- Calibration & the gate ------------------------------------------------
+# `calibrate` maximises precision subject to these two constraints; the same
+# two are the phase04 gate targets (met => the ML phases are unnecessary).
+TARGET_CATCH_RECALL = 0.97
+TARGET_REVIEW_SHARE = 0.10
+
+# Threshold grid searched by `calibrate` (0.05 steps; 0 is excluded on purpose
+# — a weak threshold of 0 would send every image to review).
+CALIBRATION_GRID = tuple(round(0.05 * i, 2) for i in range(1, 21))
 
 
 def band_for(confidence: float) -> str:
-    """Map a confidence score in [0, 1] to its band name."""
+    """Map a *normalized* confidence in [0, 1] to its band name."""
     if confidence >= POSITIVE_THRESHOLD:
         return BAND_POSITIVE
     if confidence >= REVIEW_THRESHOLD:

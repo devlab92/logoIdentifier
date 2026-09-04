@@ -1,4 +1,4 @@
-"""End-to-end `scan` and `benchmark` behaviour.
+"""End-to-end `scan`, `benchmark` and `calibrate` behaviour.
 
 The walk/load/report tests run with `signals=()` so they stay fast and cannot
 be perturbed by what the OCR engine reads out of procedural noise; the real
@@ -8,6 +8,7 @@ pipeline is covered by `test_scan_detects_brand_text_end_to_end`.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import make_synthetic
 from logoscanner import __version__, config
@@ -145,6 +146,36 @@ def test_benchmark_command_runs_and_records(tmp_path, dummy_logo_path, capsys, m
 
 def test_benchmark_missing_folder_exits_nonzero(tmp_path, capsys):
     assert main(["benchmark", "--labeled", str(tmp_path / "nope")]) == 2
+    assert "not found" in capsys.readouterr().out
+
+
+def test_calibrate_command_reports_and_writes_its_json(tmp_path, dummy_logo_path, capsys, monkeypatch):
+    labeled = tmp_path / "labeled"
+    make_synthetic.generate(
+        labeled, count=4, positive_ratio=0.5, logo_path=dummy_logo_path,
+        size=(240, 420), seed=22, text_ratio=1.0,
+    )
+    config_source = Path(config.__file__).read_text(encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # output/ lands in the sandbox
+
+    exit_code = main([
+        "calibrate", "--labeled", str(labeled), "--signals", "ocr",
+        "--no-progress", "--no-apply",
+    ])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "catch-recall" in out and "GATE" in out
+    payload = json.loads((tmp_path / "output" / "calibration.json").read_text(encoding="utf-8"))
+    assert payload["signals"] == ["ocr"]
+    assert set(payload["thresholds"]["ocr"]) == {"weak", "strong"}
+    assert "passed" in payload["gate"]
+    # --no-apply keeps the shipped thresholds exactly where they were.
+    assert Path(config.__file__).read_text(encoding="utf-8") == config_source
+
+
+def test_calibrate_missing_folder_exits_nonzero(tmp_path, capsys):
+    assert main(["calibrate", "--labeled", str(tmp_path / "nope")]) == 2
     assert "not found" in capsys.readouterr().out
 
 
