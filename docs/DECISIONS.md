@@ -94,3 +94,36 @@ set was invisible to every metric - exactly the failure mode hard rule 5 exists 
 with AVIF support) and converts RGB->BGR. Files that are genuinely broken still come back as
 `decode failed` rather than disappearing.
 
+
+## D-017 - SIFT matches are kept one per image location, then verified geometrically (phase03)
+Lowe's ratio test alone is not enough for a logo. Marks are built from repeated geometry, so
+dozens of template descriptors can land on the *same* image keypoint; RANSAC then "verifies" the
+homography that folds the whole logo onto that single point and reports 40+ inliers on an image
+that contains nothing. `good_matches` therefore keeps only the closest match per image *location*
+(rounded to a pixel, because SIFT emits several keypoints per spot at different scales), and the
+projected quad must additionally be convex, have real area, keep sane edge lengths and aspect,
+and be centred inside the frame (`plausible_box`). Score is `min(1, inliers / SIFT_SCORE_NORM)`
+with `SIFT_SCORE_NORM = 25`: on the labeled set, verified matches run to ~31 inliers, so the
+provisional bands make 15 inliers a `review` and 22 a `positive`.
+
+## D-018 - The fake test logo needed interior detail (phase03)
+The phase01 dummy mark (a flat hexagon plus "ACME") is invisible to SIFT: nearly all of its
+keypoints sit on the outline, whose descriptors change with whatever background it is pasted on,
+and a six-fold-symmetric silhouette makes the ratio test discard the few that survive - the
+synthetic tests could not exercise the signal at all. `tools/make_dummy_logo.py` now draws an
+off-centre eye, a slash, bars, dots, a chevron and a tagline on a 720x240 canvas, which is what
+real logos carry. With the production thresholds the worst synthetic case (0.4x on a noisy
+background) clears 10 inliers against a floor of 8, and pure backgrounds still score 0.
+
+## D-019 - `benchmark` prints the naive-OR row for several signals (phase03)
+`benchmark --signals ocr,sift` now also reports a `ocr+sift` row: per image, the strongest of the
+two scores - exactly what `pipeline.decide` does. Without it the table shows only what each
+signal does alone, which is not what the user ships. The combined row's cost column sums both
+signals, because that is the wall clock a scan actually pays.
+
+## D-020 - Tests never read the real `logo/` (phase03)
+An autouse fixture points `config.LOGO_DIR` at an empty temp folder for the whole suite, so the
+default SIFT signal is inert in tests and no company asset can leak into a test run (hard rule 4).
+Tests that need templates opt in with the `fake_logo_dir` fixture, which holds only the committed
+fake mark. The side effect is that one CLI test prints the "no usable logo variants" warning -
+that is the graceful-degradation path being exercised, not a failure.

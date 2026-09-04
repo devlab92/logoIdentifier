@@ -7,11 +7,13 @@ import pytest
 
 from logoscanner.benchmark import (
     GRID,
+    PHASE,
     Point,
     SignalScores,
     append_rows,
     benchmark_row,
     best_point,
+    combine,
     evaluate,
     run_benchmark,
     score_labeled,
@@ -84,7 +86,7 @@ def test_benchmark_row_has_the_documented_columns():
     row = benchmark_row("ocr", entry, best_point(sweep(entry)), note="hello")
     cells = [cell.strip() for cell in row.strip("|").split("|")]
     assert len(cells) == 9
-    assert cells[1] == "phase02" and cells[2] == "3/2" and cells[3] == "ocr"
+    assert cells[1] == PHASE and cells[2] == "3/2" and cells[3] == "ocr"
     assert cells[7] == "1.00"  # 5 images / 5 s
     assert "hello" in cells[8] and "t_rev=" in cells[8]
 
@@ -158,3 +160,36 @@ def test_run_benchmark_can_skip_the_docs_row(tmp_path, dummy_logo_path):
     docs = tmp_path / "BENCHMARKS.md"
     run_benchmark(labeled, [ConstantSignal()], progress=False, write_docs=False, docs_path=docs)
     assert not docs.exists()
+
+
+def test_combine_takes_the_strongest_signal_per_image():
+    weak = scores([0.9, 0.1], [0.2, 0.0], name="ocr")
+    other = scores([0.2, 0.8], [0.0, 0.5], name="sift")
+    weak.seconds, other.seconds = 1.0, 2.0
+
+    merged = combine([weak, other])
+
+    assert merged.name == "ocr+sift"
+    assert merged.positive == [0.9, 0.8]
+    assert merged.negative == [0.2, 0.5]
+    assert merged.seconds == 3.0  # the human waits for both signals
+
+
+def test_run_benchmark_adds_a_combined_row_for_several_signals(tmp_path, dummy_logo_path):
+    labeled = tmp_path / "labeled"
+    make_synthetic.generate(
+        labeled, count=4, positive_ratio=0.5, logo_path=dummy_logo_path,
+        size=(60, 80), seed=3,
+    )
+    docs = tmp_path / "BENCHMARKS.md"
+
+    summary = run_benchmark(
+        labeled,
+        [ConstantSignal(0.3, "quiet"), ConstantSignal(0.9, "loud")],
+        progress=False,
+        docs_path=docs,
+    )
+
+    assert set(summary["signals"]) == {"quiet", "loud", "quiet+loud"}
+    text = docs.read_text(encoding="utf-8")
+    assert text.count("| quiet+loud |") == 1 and "naive OR" in text

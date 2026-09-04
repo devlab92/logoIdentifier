@@ -37,22 +37,24 @@ needs no network. Engine start-up costs ~2 s once per process.
 |---|---|---|
 | `pytest` | run test suite | phase01 |
 | `python -m logoscanner version` | print version | phase01 |
-| `python -m logoscanner scan --input input --output output [--limit N] [--no-progress] [--signals ocr]` | scan a folder recursively, run the enabled signals, write `results.csv` + `summary.json`, print throughput + ETA for 10k | phase01, detection since phase02 |
+| `python -m logoscanner scan --input input --output output [--limit N] [--no-progress] [--signals ocr,sift]` | scan a folder recursively, run the enabled signals, write `results.csv` + `summary.json`, print throughput + ETA for 10k | phase01, OCR since phase02, SIFT since phase03 |
 | `python tools\make_dummy_logo.py` | (re)generate `tests/assets/dummy_logo.png` fake mark | phase01 |
 | `python tools\make_synthetic.py --out .tmp_synth --count 50 [--positive-ratio 0.5] [--seed 1] [--with-text [RATIO]]` | generate a synthetic labeled set; `--with-text` also renders the brand name into that share of the positives (bare flag = 0.6) so OCR is testable without company images | phase01, `--with-text` phase02 |
 | `python tools\check_dataset.py [--root data/labeled]` | counts + size stats for the labeled dataset | phase01 |
 | `python tools\wp_collect.py [--dry-run] [--dedupe] [--source DIR] [--dest DIR] [--years 2014-2026]` | collect one original per image from a WordPress `uploads/` tree into `input\wp_originals\<YYYY-MM>\<original name>` + a manifest CSV | side tool |
-| `python -m logoscanner benchmark --labeled data/labeled [--signals ocr] [--limit N] [--no-progress] [--no-record] [--note "..."]` | score every signal over `positive/` + `negative/`, sweep the (review, positive) threshold grid, print the table and append a row to `docs/BENCHMARKS.md` (`--no-record` skips the row) | phase02 |
+| `python -m logoscanner benchmark --labeled data/labeled [--signals ocr,sift] [--limit N] [--no-progress] [--no-record] [--note "..."]` | score every signal over `positive/` + `negative/`, sweep the (review, positive) threshold grid, print the table and append a row to `docs/BENCHMARKS.md` (`--no-record` skips the row); several signals also get a combined naive-OR row | phase02, combined row phase03 |
 | `python -m logoscanner calibrate --labeled data/labeled` | tune thresholds | phase04 |
 
-## Smoke test (phase02 verify)
+## Smoke test (phase03 verify)
 ```powershell
 python tools\make_dummy_logo.py
 python tools\make_synthetic.py --out .tmp_synth --count 50 --with-text
 python -m logoscanner scan --input .tmp_synth --output .tmp_out
-python -m logoscanner benchmark --labeled data\labeled --signals ocr
+python -m logoscanner benchmark --labeled data\labeled --signals ocr,sift
 pytest -q
 ```
+The SIFT signal reads the logo variants in `logo/` (local-only, gitignored). With that folder
+empty it warns once and scores 0 - the scan still runs on OCR alone.
 `.tmp_*` folders are gitignored scratch; delete them freely.
 
 ## Outputs

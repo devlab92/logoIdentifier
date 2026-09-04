@@ -146,3 +146,42 @@ def test_benchmark_command_runs_and_records(tmp_path, dummy_logo_path, capsys, m
 def test_benchmark_missing_folder_exits_nonzero(tmp_path, capsys):
     assert main(["benchmark", "--labeled", str(tmp_path / "nope")]) == 2
     assert "not found" in capsys.readouterr().out
+
+
+def test_scan_finds_the_mark_with_the_sift_signal(tmp_path, dummy_logo_path, fake_logo_dir, monkeypatch):
+    """The symbol path end to end: no brand text anywhere, boxes still reported."""
+    monkeypatch.setattr(config, "LOGO_DIR", str(fake_logo_dir))
+    input_dir, output_dir = tmp_path / "in", tmp_path / "out"
+    make_synthetic.generate(
+        input_dir, count=4, positive_ratio=0.5, logo_path=dummy_logo_path,
+        size=(900, 1200), seed=23,
+    )
+
+    summary = run_scan(input_dir, output_dir, progress=False, signals=("sift",))
+
+    assert summary["signals"] == ["sift"]
+    rows = {row.filename: row for row in read_csv(output_dir / CSV_NAME)}
+    positives = [row for name, row in rows.items() if name.startswith("positive")]
+    assert positives and all(row.confidence > 0 for row in positives)
+    assert all(row.method == "sift" for row in positives)
+    assert all(None not in (row.x, row.y, row.w, row.h) for row in positives)
+    negatives = [row for name, row in rows.items() if name.startswith("negative")]
+    assert all(row.confidence == 0.0 for row in negatives)
+
+
+def test_benchmark_command_reports_signals_together(tmp_path, dummy_logo_path, fake_logo_dir, capsys, monkeypatch):
+    monkeypatch.setattr(config, "LOGO_DIR", str(fake_logo_dir))
+    labeled = tmp_path / "labeled"
+    make_synthetic.generate(
+        labeled, count=4, positive_ratio=0.5, logo_path=dummy_logo_path,
+        size=(240, 420), seed=24, text_ratio=1.0,
+    )
+
+    exit_code = main([
+        "benchmark", "--labeled", str(labeled), "--signals", "ocr,sift",
+        "--no-progress", "--no-record",
+    ])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "signal: ocr" in out and "signal: sift" in out and "signal: ocr+sift" in out

@@ -25,6 +25,8 @@ from logoscanner.io_utils import iter_images, load_image
 from logoscanner.signals import build_all
 
 CLASS_DIRS = ("positive", "negative")
+# Stamped into every BENCHMARKS row; bump it when a phase changes the signals.
+PHASE = "phase03"
 # Coarse grid, 0.05 steps. Fine enough to see the shape, cheap enough to print.
 GRID = tuple(round(0.05 * i, 2) for i in range(1, 20))
 
@@ -113,6 +115,25 @@ def score_labeled(
     return scores, meta
 
 
+def combine(entries, name: str | None = None) -> SignalScores:
+    """Naive OR of several signals: per image, the strongest score wins.
+
+    This is exactly what `pipeline.decide` does, so the combined row shows what
+    the scanner would actually deliver with those signals enabled together.
+    Scores line up positionally because `score_labeled` shows every image to
+    every signal in one pass.
+    """
+    entries = list(entries)
+    merged = SignalScores(name or "+".join(entry.name for entry in entries))
+    if not entries:
+        return merged
+    merged.seconds = sum(entry.seconds for entry in entries)
+    for label in ("positive", "negative"):
+        columns = [getattr(entry, label) for entry in entries]
+        getattr(merged, label).extend(max(row) for row in zip(*columns))
+    return merged
+
+
 def evaluate(scores: SignalScores, review_threshold: float, positive_threshold: float) -> Point:
     """Metrics for one threshold pair on one signal's score distribution."""
     positives, negatives = scores.positive, scores.negative
@@ -187,7 +208,7 @@ def benchmark_row(
     signal_name: str,
     scores: SignalScores,
     best: Point | None,
-    phase: str = "phase02",
+    phase: str = PHASE,
     note: str = "",
 ) -> str:
     """One markdown table row for docs/BENCHMARKS.md."""
@@ -232,14 +253,21 @@ def run_benchmark(
         labeled_dir, signal_names or config.ENABLED_SIGNALS, limit=limit, progress=progress
     )
 
+    entries = [scores[name] for name in meta["signals"]]
+    if len(entries) > 1:
+        # What the pipeline would actually report with these signals together.
+        entries.append(combine(entries))
+
     rows, summary = [], {}
-    for name in meta["signals"]:
-        entry = scores[name]
+    for entry in entries:
         best = best_point(sweep(entry))
+        row_note = "; ".join(
+            part for part in ("naive OR" if "+" in entry.name else "", note) if part
+        )
         print()
         print(format_report(entry, best))
-        rows.append(benchmark_row(name, entry, best, note=note))
-        summary[name] = {
+        rows.append(benchmark_row(entry.name, entry, best, note=row_note))
+        summary[entry.name] = {
             "images": entry.images,
             "seconds": round(entry.seconds, 3),
             "best": None

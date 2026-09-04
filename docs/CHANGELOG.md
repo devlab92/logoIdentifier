@@ -2,6 +2,37 @@
 
 > Newest first. One dated block per working session that changed the repo.
 
+## 2026-09-04 - phase03
+- `logoscanner/keypoints.py`: `SiftSignal` (registered as `"sift"`). SIFT descriptors are computed
+  once per variant in `logo/` (grayscale, alpha-aware, tiny variants upscaled to 300 px), matched
+  per image with a Lowe ratio test, and verified by a RANSAC homography; score =
+  `min(1, inliers / 25)`, bbox = the projected logo corners in the original image's coordinates.
+- **Two failures found and fixed while probing the real logos (D-017):** a plain ratio test let
+  many template descriptors match the *same* image keypoint, and RANSAC then "verified" the
+  homography folding the logo onto that single point - 40+ inliers on an image containing nothing.
+  Matches are now kept one per image location, and the projected quad must be convex, have real
+  area, keep sane edges/aspect and be centred in the frame (`plausible_box`).
+- **The phase01 dummy logo was invisible to SIFT (D-018):** a flat, six-fold-symmetric silhouette
+  gives almost no usable descriptors, so every synthetic case scored 0 at any threshold and the
+  signal could not be tested at all. `tools/make_dummy_logo.py` now draws interior detail on a
+  720x240 canvas; `tests/assets/dummy_logo.png` regenerated.
+- `logoscanner/config.py`: `LOGO_DIR` and the `SIFT_*` tunables (min side, Lowe ratio, min good
+  matches / inliers, RANSAC reprojection, score norm, box-plausibility limits);
+  `ENABLED_SIGNALS = ("ocr", "sift")`.
+- `logoscanner/benchmark.py`: `combine()` adds a naive-OR row when several signals are requested,
+  so `--signals ocr,sift` shows what a scan actually ships (D-019); rows are stamped `phase03`.
+- Missing or empty `logo/` warns once and the signal scores 0 for every image - a scan still runs
+  on OCR alone. Tests never read the real `logo/`: an autouse fixture points `config.LOGO_DIR` at
+  an empty temp folder, and `fake_logo_dir` serves the committed fake mark (D-020).
+- Tests: `tests/test_keypoints.py` (scale 0.4x/1.0x/1.5x, +/-10 degrees, bbox in original
+  coordinates incl. images over `MAX_SIDE`, degenerate-homography rejection, template building,
+  graceful skip) plus SIFT scan and combined-benchmark cases in `test_cli.py`. Suite 97 -> 122.
+- Benchmark (100 positive / 158 negative): sift alone catch-recall **0.550** at precision
+  **1.000** (only 2 negatives ever score above 0), 3.97 img/s. Combined `ocr+sift` catch-recall
+  **0.940** / precision 0.875 / review 8.9%, 0.62 img/s (~4.5 h for 10k). SIFT rescues **1 of the
+  7 OCR-blind positives**; the other 6 carry no readable text *and* no matchable symbol geometry,
+  so they stay invisible to both signals - the case phase04's gate has to judge.
+
 ## 2026-09-04 - phase02
 - Dependency: `rapidocr-onnxruntime==1.4.4` (+ its onnxruntime/pillow/shapely stack). The ONNX
   models ship inside the wheel, so the runtime stays offline; engine init ~2.3 s per process.

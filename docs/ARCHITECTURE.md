@@ -3,25 +3,30 @@
 > Keep this file matching reality. Update on any behavioral change.
 
 ## Current state
-**phase02 done: the OCR signal is live.** `python -m logoscanner scan` walks a folder
-(`io_utils.iter_images`), loads each image safely (`io_utils.load_image`, downscaled to
+**phase03 done: both text and symbol signals are live.** `python -m logoscanner scan` walks a
+folder (`io_utils.iter_images`), loads each image safely (`io_utils.load_image`, downscaled to
 `config.MAX_SIDE`, decode failures recorded not raised, AVIF via a Pillow fallback), runs
 every signal in `config.ENABLED_SIGNALS` through `pipeline.Pipeline`, and writes one
 `results.ResultRow` per image into `results.csv` + `summary.json`.
 
-Only the OCR signal exists so far: `ocr.OcrSignal` reads text with RapidOCR and fuzzy-matches
-each line against `config.BRAND_TERMS` (D-013), scoring `fuzz/100 x ocr_confidence` and
-returning the winning line's box. `pipeline.decide` applies the OR rule over signals and bands
-the winner with `config.band_for`; those thresholds are provisional (0.85 / 0.60) until phase04
-calibrates them. SIFT lands in phase03.
+`ocr.OcrSignal` reads text with RapidOCR and fuzzy-matches each line against
+`config.BRAND_TERMS` (D-013), scoring `fuzz/100 x ocr_confidence` and returning the winning
+line's box. `keypoints.SiftSignal` covers the logos OCR cannot read: SIFT descriptors are
+computed once per variant in `logo/`, matched with a Lowe ratio test kept one-per-image-location,
+and verified by a RANSAC homography whose projected quad must be a believable logo placement
+(D-017); score is `min(1, inliers / SIFT_SCORE_NORM)`. An empty or missing `logo/` warns once
+and the signal scores 0, so a scan still runs on OCR alone. `pipeline.decide` applies the OR
+rule over signals and bands the winner with `config.band_for`; those thresholds are provisional
+(0.85 / 0.60) until phase04 calibrates them.
 
-`python -m logoscanner benchmark --labeled <dir> --signals ocr` scores `positive/` + `negative/`,
-sweeps a coarse (review, positive) threshold grid and prints precision / catch-recall / review
-share per signal, appending a row to `docs/BENCHMARKS.md`. Operating points are picked
-recall-first (D-014) and reported only - nothing writes back into `config` yet.
+`python -m logoscanner benchmark --labeled <dir> --signals ocr,sift` scores `positive/` +
+`negative/`, sweeps a coarse (review, positive) threshold grid and prints precision /
+catch-recall / review share per signal plus a naive-OR row for the signals together (D-019),
+appending rows to `docs/BENCHMARKS.md`. Operating points are picked recall-first (D-014) and
+reported only - nothing writes back into `config` yet.
 
-Measured: phase01 baseline was ~42 img/s for walk + decode + resize alone. OCR dominates now
-(see BENCHMARKS for the current figure), so the 10k ETA is set by the OCR cost per image.
+Measured: phase01 baseline was ~42 img/s for walk + decode + resize alone. OCR dominates the
+cost (SIFT adds ~0.15 s per image); see BENCHMARKS for the current figure and the 10k ETA.
 
 Target design below.
 

@@ -6,6 +6,7 @@ scripts) to `sys.path` so tests run without installing the package.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -28,3 +29,28 @@ def dummy_logo_path() -> Path:
 
         make_dummy_logo.main(["--out", str(path)])
     return path
+
+
+@pytest.fixture(scope="session")
+def fake_logo_dir(tmp_path_factory, dummy_logo_path) -> Path:
+    """A `logo/`-shaped folder holding only the fake mark (phase03 SIFT)."""
+    folder = tmp_path_factory.mktemp("fake_logo")
+    shutil.copy(dummy_logo_path, folder / dummy_logo_path.name)
+    return folder
+
+
+@pytest.fixture(scope="session")
+def _empty_logo_dir(tmp_path_factory) -> Path:
+    return tmp_path_factory.mktemp("no_logo")
+
+
+@pytest.fixture(autouse=True)
+def isolate_logo_dir(monkeypatch, _empty_logo_dir):
+    """Privacy guard: no test ever reads the real `logo/`.
+
+    `config.LOGO_DIR` points at an empty folder by default, so the SIFT signal
+    is inert unless a test opts in with `fake_logo_dir`.
+    """
+    from logoscanner import config
+
+    monkeypatch.setattr(config, "LOGO_DIR", str(_empty_logo_dir))
