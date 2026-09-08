@@ -48,8 +48,8 @@ Two positives are still missed, both genuine detector failures:
   buys back, lower `emb` weak/strong - that is the dial.
 
 ## User homework (blockers owned by the human)
-- [~] GitHub repo created and `origin` set (`devlab92/logoIdentifier`); **push still pending** -
-      run `git push -u origin main` yourself (the agent's push is blocked by permissions)
+- [x] GitHub repo `devlab92/logoIdentifier` created, `origin` set, and **pushed** - the earlier
+      permission block has cleared; `main` is up to date through phase05 (b88e5e8)
 - [x] Set the real `BRAND_TERMS` in `logoscanner/config.py` (`ZPE`, `ZPE Systems`)
 - [x] Label real images into `data/labeled/positive|negative/` - now 98/160 after the two
       logo-free images were reclassified
