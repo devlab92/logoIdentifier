@@ -69,13 +69,29 @@ needs no network. Engine start-up costs ~2 s once per process.
 | `pytest` | run test suite | phase01 |
 | `pytest -m "not slow"` | fast suite: skips the tests that need the DINOv2 checkpoint | phase05 |
 | `python -m logoscanner version` | print version | phase01 |
-| `python -m logoscanner scan --input input --output output [--limit N] [--no-progress] [--signals ocr,sift]` | scan a folder recursively, run the enabled signals, write `results.csv` + `summary.json`, print throughput + ETA for 10k | phase01, OCR since phase02, SIFT since phase03 |
+| `python -m logoscanner scan --input input --output output [--limit N] [--no-progress] [--restart] [--no-artifacts] [--signals ocr,sift]` | scan a folder recursively, run the enabled signals, write `results.csv` + `summary.json` + `errors.csv` and the `detected/ review/ crops/` folders, print the summary block. **Resumable:** stop it any time (Ctrl-C, crash, reboot) and run the same command again - it picks up from `output/.progress.jsonl`. Identical and near-identical images are detected and never scanned twice. `--restart` throws the journal away and rescans everything - **do that after any threshold or signal change**, or old verdicts are reused. `--no-artifacts` writes the reports only | phase01, OCR since phase02, SIFT since phase03, resume/dedup/artifacts since phase07 |
 | `python tools\make_dummy_logo.py` | (re)generate `tests/assets/dummy_logo.png` fake mark | phase01 |
 | `python tools\make_synthetic.py --out .tmp_synth --count 50 [--positive-ratio 0.5] [--seed 1] [--with-text [RATIO]]` | generate a synthetic labeled set; `--with-text` also renders the brand name into that share of the positives (bare flag = 0.6) so OCR is testable without company images | phase01, `--with-text` phase02 |
 | `python tools\check_dataset.py [--root data/labeled]` | counts + size stats for the labeled dataset | phase01 |
 | `python tools\wp_collect.py [--dry-run] [--dedupe] [--source DIR] [--dest DIR] [--years 2014-2026]` | collect one original per image from a WordPress `uploads/` tree into `input\wp_originals\<YYYY-MM>\<original name>` + a manifest CSV | side tool |
 | `python -m logoscanner benchmark --labeled data/labeled [--signals ocr,sift] [--limit N] [--no-progress] [--no-record] [--note "..."]` | score every signal over `positive/` + `negative/`, sweep the (review, positive) threshold grid, print the table and append a row to `docs/BENCHMARKS.md` (`--no-record` skips the row); several signals also get a combined naive-OR row | phase02, combined row phase03 |
 | `python -m logoscanner calibrate --labeled data/labeled [--signals ocr,sift,emb] [--limit N] [--no-progress] [--no-apply]` | score the labeled set once, grid-search each signal's `(weak, strong)` thresholds, print the metrics + gate verdict, write `output/calibration.json`, rewrite the calibrated block in `logoscanner/config.py` (`--no-apply` skips that) and, when the gate fails, write `output/gate_failures.txt` | phase04 |
+
+## Smoke test (phase07 verify)
+```powershell
+pytest -q
+python -m logoscanner scan --input input --output output
+```
+The scan is resumable and safe to interrupt: Ctrl-C stops after the image in flight, writes the
+reports for everything finished so far, and the same command resumes from there. To review a
+finished run, open `output\crops\` (fast) or `output\review\` (full images).
+
+Two things to know about resume:
+- **After changing a threshold, a signal or `logo/`, pass `--restart`.** A plain re-run reuses the
+  journaled verdicts, which were produced by the old settings.
+- Artifacts are written when an image is processed, and a resume does not backfill them - so
+  `--no-artifacts` followed by a plain resume leaves the first run's flagged images out of
+  `review/`. `--restart` is the fix.
 
 ## Smoke test (phase04 verify)
 ```powershell
@@ -99,7 +115,15 @@ empty it warns once and scores 0 - the scan still runs on OCR alone.
 `.tmp_*` folders are gitignored scratch; delete them freely.
 
 ## Outputs
-- `output\results.csv` — one row per image: `filename, contains_logo, band, confidence, x, y, w, h, method, error`.
-- `output\summary.json` — per-band totals, error count, seconds, img/s, ETA for 10,000 images.
+- `output\results.csv` — one row per image: `filename, contains_logo, band, confidence, x, y, w, h, method, duplicate_of, error`.
+- `output\summary.json` — per-band totals, duplicates, errors, processed/skipped, seconds, img/s, ETA for 10,000 images.
+- `output\errors.csv` — just the files that could not be processed (`filename, error`).
+- `output\.progress.jsonl` — the resume journal: one JSON line per processed image, and the source
+  of truth the three reports above are rebuilt from (D-030). Delete it (or pass `--restart`) to
+  force a full rescan; keep it to resume one.
+- `output\detected\` and `output\review\` — copies of the flagged originals, input folder
+  structure mirrored. Duplicates are listed in the CSV but not copied here.
+- `output\crops\` — the matched box of each flagged image, padded 10%, as `<name>_crop.jpg`.
+  Fastest way to review a large run.
 - `output\calibration.json` — what `calibrate` chose: thresholds, metrics, confusion counts, the misses by name, and the gate verdict.
 - `output\gate_failures.txt` — written only when the gate fails: one line per positive the signals missed, with a reason.

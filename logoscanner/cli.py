@@ -1,6 +1,7 @@
 """Command line interface: `python -m logoscanner <command>`.
 
-`scan` walks a folder and writes the reports, `benchmark` measures each signal
+`scan` walks a folder and writes the reports - resumably, skipping duplicate
+images and saving review artifacts since phase07 - `benchmark` measures each signal
 on a labeled set, `calibrate` (phase04) tunes the per-signal thresholds on that
 same set and writes them into `config.py`, and `version` prints the version.
 """
@@ -14,19 +15,84 @@ from pathlib import Path
 from tqdm import tqdm
 
 from logoscanner import __version__
-from logoscanner import config, signals
+from logoscanner import artifacts, config, dedup, journal, signals
 from logoscanner.benchmark import run_benchmark
 from logoscanner.calibrate import run_calibration
 from logoscanner.io_utils import iter_images, load_image
+from logoscanner.journal import JOURNAL_NAME, Journal, JournalEntry
 from logoscanner.pipeline import build_pipeline
 from logoscanner.results import (
     CSV_NAME,
+    ERRORS_NAME,
     JSON_NAME,
-    ResultRow,
     summarize,
     write_csv,
+    write_errors,
     write_json,
 )
+
+
+def _process_one(
+    path: Path,
+    relative: str,
+    pipeline,
+    index: dedup.DuplicateIndex,
+    entries: dict[str, JournalEntry],
+    output_dir: Path,
+    save_artifacts: bool,
+) -> JournalEntry:
+    """Turn one file into its journal entry: dedup, load, score, save artifacts.
+
+    The two hashes come first because both are far cheaper than a signal pass:
+    identical bytes never reach the decoder, and a re-encode of something
+    already scanned never reaches the pipeline.
+    """
+    try:
+        sha = dedup.sha256_file(path)
+    except OSError as exc:
+        return journal.error_entry(relative, f"read failed: {exc.strerror or exc}")
+
+    image, image_hash = None, None
+    twin = index.find_by_sha(sha)
+    if twin is None:
+        image, error = load_image(path)
+        if error:
+            return journal.error_entry(relative, error, sha=sha)
+        image_hash = dedup.dhash(image)
+        twin = index.find_by_hash(image_hash)
+
+    if twin is not None and twin in entries:
+        # Same picture, already judged: copy the verdict, run nothing. No crop
+        # and no copy either - the point of dedup is to keep the review folder
+        # free of the same image five times over.
+        return journal.copy_of(entries[twin], relative, sha=sha, image_hash=image_hash)
+
+    entry = JournalEntry.from_decision(
+        relative, pipeline.run(image), sha=sha, image_hash=image_hash
+    )
+    if save_artifacts:
+        problem = artifacts.save(image, path, output_dir, relative, entry.band, entry.bbox)
+        if problem:
+            entry.error = problem
+    index.add(relative, sha, image_hash)
+    return entry
+
+
+def _counter_line(counts: dict[str, int]) -> str:
+    """The live band tally tqdm shows to the right of the bar."""
+    parts = [f"{name[:3]}={counts.get(name, 0)}" for name in config.BANDS]
+    parts.append(f"dup={counts.get('duplicate', 0)}")
+    parts.append(f"err={counts.get('error', 0)}")
+    return " ".join(parts)
+
+
+def _tally(counts: dict[str, int], entry: JournalEntry) -> None:
+    """Fold one entry into the live counters."""
+    counts[entry.band] = counts.get(entry.band, 0) + 1
+    if entry.duplicate_of:
+        counts["duplicate"] = counts.get("duplicate", 0) + 1
+    if entry.error:
+        counts["error"] = counts.get("error", 0) + 1
 
 
 def run_scan(
@@ -35,39 +101,82 @@ def run_scan(
     limit: int | None = None,
     progress: bool = True,
     signals=None,
+    restart: bool = False,
+    save_artifacts: bool = True,
 ) -> dict:
-    """Scan `input_dir`, write CSV + JSON into `output_dir`, return the summary.
+    """Scan `input_dir`, write the reports into `output_dir`, return the summary.
 
-    Every readable image goes through the signal pipeline; `decision.decide`
-    bands it against the calibrated per-signal thresholds in `config`.
+    Resumable: every finished image is appended to `output/.progress.jsonl` and
+    flushed before the next one starts, and a re-run skips whatever that
+    journal already holds. Ctrl-C stops after the image in flight and still
+    writes complete reports. The reports are always rebuilt from the journal,
+    so they describe the whole collection and not just this run's slice (D-030).
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
-    pipeline = build_pipeline(signals)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    journal_path = output_dir / JOURNAL_NAME
+    if restart:
+        journal.reset(journal_path)
 
+    entries = journal.load(journal_path)
+    index = dedup.DuplicateIndex()
+    for done in entries.values():
+        # Only images that were actually scanned can lend their verdict to a
+        # duplicate; failures and copies are not originals.
+        if not done.error and not done.duplicate_of:
+            index.add(done.path, done.sha256, done.image_hash)
+
+    pipeline = build_pipeline(signals)
     paths = list(iter_images(input_dir))
     if limit is not None:
         paths = paths[:limit]
 
-    rows: list[ResultRow] = []
+    counts: dict[str, int] = {}
+    for done in entries.values():
+        _tally(counts, done)
+
+    processed, interrupted = 0, False
     start = time.perf_counter()
-    for path in tqdm(paths, desc="scanning", unit="img", disable=not progress):
+    with Journal(journal_path) as log:
+        bar = tqdm(paths, desc="scanning", unit="img", disable=not progress)
         try:
-            relative = str(path.relative_to(input_dir))
-        except ValueError:  # pragma: no cover - path is always under input_dir
-            relative = str(path)
-        image, error = load_image(path)
-        if error:
-            rows.append(ResultRow(filename=relative, error=error, method="none"))
-            continue
-        rows.append(pipeline.run(image).to_row(relative))
+            for path in bar:
+                try:
+                    relative = str(path.relative_to(input_dir))
+                except ValueError:  # pragma: no cover - path is always under input_dir
+                    relative = str(path)
+                if relative in entries:
+                    continue
+                try:
+                    entry = _process_one(
+                        path, relative, pipeline, index, entries, output_dir, save_artifacts
+                    )
+                except Exception as exc:  # one bad image must never end the run
+                    entry = journal.error_entry(relative, f"{type(exc).__name__}: {exc}")
+                log.append(entry)
+                entries[relative] = entry
+                processed += 1
+                _tally(counts, entry)
+                if progress:
+                    bar.set_postfix_str(_counter_line(counts), refresh=False)
+        except KeyboardInterrupt:
+            interrupted = True
+        finally:
+            bar.close()
     seconds = time.perf_counter() - start
 
-    summary = summarize(rows, seconds)
+    rows = journal.rows(entries.values())
+    summary = summarize(rows, seconds, processed=processed)
     summary["input"] = str(input_dir)
+    summary["output"] = str(output_dir)
     summary["signals"] = list(pipeline.names)
+    summary["interrupted"] = interrupted
     write_csv(rows, output_dir / CSV_NAME)
+    write_errors(rows, output_dir / ERRORS_NAME)
     write_json(summary, output_dir / JSON_NAME)
+    if interrupted:
+        print("\ninterrupted - reports written; re-run the same command to resume")
     return summary
 
 
@@ -86,18 +195,27 @@ def _format_duration(seconds: float | None) -> str:
 
 
 def print_report(summary: dict, output_dir: Path) -> None:
-    """Print the throughput report described by phase01 step 3."""
+    """End-of-run summary block: what was found, what it cost, where it went."""
     bands = summary["bands"]
     print()
     print(f"Scanned    : {summary['images']} images from {summary['input']}")
-    print(f"Signals    : " + ", ".join(summary.get("signals") or ["none"]))
-    print(f"Bands      : " + "  ".join(f"{name}={bands.get(name, 0)}" for name in config.BANDS))
+    print(f"  processed: {summary['processed']} this run, {summary['skipped']} already journaled")
+    print("Signals    : " + ", ".join(summary.get("signals") or ["none"]))
+    print("Bands      : " + "  ".join(f"{name}={bands.get(name, 0)}" for name in config.BANDS))
+    print(f"Duplicates : {summary['duplicates']} (verdict copied, not re-scanned)")
     print(f"Errors     : {summary['errors']}")
-    print(f"Elapsed    : {summary['seconds']:.2f} s")
+    print(f"Elapsed    : {_format_duration(summary['seconds'])}")
     print(f"Throughput : {summary['images_per_second']:.2f} img/s")
     print(f"ETA 10,000 : {_format_duration(summary['eta_10k_seconds'])}")
     print(f"Report     : {output_dir / CSV_NAME}")
     print(f"Summary    : {output_dir / JSON_NAME}")
+    if summary["errors"]:
+        print(f"Errors CSV : {output_dir / ERRORS_NAME}")
+    if bands.get(config.BAND_POSITIVE):
+        print(f"Detected   : {output_dir / artifacts.DETECTED_DIR}")
+    if bands.get(config.BAND_REVIEW):
+        print(f"Review     : {output_dir / artifacts.REVIEW_DIR}   "
+              f"(crops: {output_dir / artifacts.CROPS_DIR})")
 
 
 def _parse_signals(value: str | None) -> tuple[str, ...] | None:
@@ -124,6 +242,17 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--output", required=True, help="folder for results.csv / summary.json")
     scan.add_argument("--limit", type=int, default=None, help="stop after N images")
     scan.add_argument("--no-progress", action="store_true", help="hide the progress bar")
+    scan.add_argument(
+        "--restart",
+        action="store_true",
+        help="discard the resume journal and scan everything again - do this after "
+             "changing thresholds or signals, or old verdicts are reused",
+    )
+    scan.add_argument(
+        "--no-artifacts",
+        action="store_true",
+        help="skip crops/ detected/ review/; write the reports only",
+    )
     scan.add_argument(
         "--signals",
         default=None,
@@ -194,6 +323,8 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             progress=not args.no_progress,
             signals=signal_names,
+            restart=args.restart,
+            save_artifacts=not args.no_artifacts,
         )
         print_report(summary, output_dir)
         return 0

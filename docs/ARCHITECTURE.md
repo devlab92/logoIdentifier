@@ -3,12 +3,18 @@
 > Keep this file matching reality. Update on any behavioral change.
 
 ## Current state
-**phase05 done: the embedding signal closed the recall gap and the gate PASSED (D-029).**
-`python -m logoscanner scan` walks a folder (`io_utils.iter_images`), loads each image safely
-(`io_utils.load_image`, downscaled to `config.MAX_SIDE`, decode failures recorded not raised,
-AVIF via a Pillow fallback), runs every signal in `config.ENABLED_SIGNALS` through
-`pipeline.Pipeline`, bands the result with `decision.decide`, and writes one `results.ResultRow`
-per image into `results.csv` + `summary.json`.
+**phase07 done: the scanner is resumable, deduplicating and crash-proof, and the full collection
+has been scanned.**
+`python -m logoscanner scan` walks a folder (`io_utils.iter_images`), and for each file:
+hashes its bytes, loads it safely (`io_utils.load_image`, downscaled to `config.MAX_SIDE`, decode
+failures recorded not raised, AVIF via a Pillow fallback), hashes its pixels, and - if neither hash
+has been seen - runs every signal in `config.ENABLED_SIGNALS` through `pipeline.Pipeline` and bands
+the result with `decision.decide`. The verdict is appended to `output/.progress.jsonl` and flushed
+to disk before the next image starts, and `results.csv` + `summary.json` are rebuilt from that
+journal at the end of every run (D-030). A re-run skips whatever the journal already holds, so a
+killed or Ctrl-C'd scan resumes where it stopped; `--restart` throws the journal away, which is
+what to do after changing a threshold. Per-image failures become rows in `results.csv` and
+`errors.csv` instead of ending the run.
 
 `ocr.OcrSignal` reads text with RapidOCR and fuzzy-matches each line against
 `config.BRAND_TERMS` (D-013), scoring `fuzz/100 x ocr_confidence` and returning the winning
@@ -49,9 +55,38 @@ attainable recall ceiling is 1.0 (D-029). The embedding signal is what cleared i
 relabeling: phase04's detector re-scored on the corrected labels still reaches only 0.959. Two
 positives are still missed - a screenshot whose wordmark OCR garbles to two characters, and one
 product diagram the calibration chose to give up in exchange for precision. **phase06 is therefore
-unnecessary and is skipped** - next is phase07.
+unnecessary and was skipped.**
 phase01 baseline was ~42 img/s for walk + decode + resize alone; OCR still dominates the cost, with
-the embedding stage adding ~0.33 s/image. See BENCHMARKS for throughput and the 10k ETA.
+the embedding stage adding ~0.33 s/image. On the real collection the scanner holds ~0.44 img/s, an
+ETA of ~6h20m for 10,000 images - comfortably inside the 12 h bar phase07 set for reaching for
+multiprocessing, which is why `--workers` does not exist. See BENCHMARKS for throughput and the
+production-run summary.
+
+### The scan loop (phase07)
+```text
+for each file under input/:
+   sha256(bytes) ─ seen? ──► copy that verdict, decode nothing        ┐
+      │ no                                                            │ duplicate_of
+   load_image ─ error? ──► error row, keep going                      │
+      │                                                               │
+   dhash(pixels) ─ within 4 bits of something seen? ──► copy verdict ─┘
+      │ no
+   signals ──► decision ──► crop + copy into detected/ | review/
+      │
+   append one JSON line to output/.progress.jsonl  (flush + fsync)
+end
+rewrite results.csv / summary.json / errors.csv from the journal
+```
+Both hashes come before the pipeline because both are thousands of times cheaper than a signal
+pass: a website export is full of the same picture saved twice, and each copy would otherwise cost
+~2 s *and* land in `review/` as another image for the human to judge (D-031). A duplicate borrows
+the original's band, confidence, box and method, and gets no crop and no copy of its own - the CSV
+still lists it, naming the original in `duplicate_of`.
+
+`output/detected/`, `output/review/` and `output/crops/` mirror the input's folder structure so
+same-named files in different folders cannot overwrite each other (D-032). The crop is the padded
+match box, and it is the fast path for review: judging a 200x80 mark takes a second where opening
+the full photo takes several. Negatives are listed in the CSV only.
 
 ## Target pipeline
 ```text
@@ -91,6 +126,16 @@ combinations are judged on the stored scores. The winner is re-measured through
 never drift from the shipped behaviour.
 
 ## Data flow & artifacts
-`input/` → scanner walk → per-image signals → decision → incremental `output/results.csv` + `output/.progress.jsonl` (resume) → final `results.json` summary + `crops/`, `detected/`, `review/`.
-Incremental writing, resume and the crop/detected/review folders are still ahead; phase02 writes
-the CSV and JSON once at the end of the run.
+`input/` → scanner walk → dedup hashes → per-image signals → decision → one journal line per image
+in `output/.progress.jsonl` (the resume point and the source of truth) → `output/results.csv`,
+`output/summary.json`, `output/errors.csv` rebuilt from the journal, plus `crops/`, `detected/` and
+`review/` for everything flagged.
+
+| artifact | what it holds |
+|---|---|
+| `.progress.jsonl` | one JSON line per processed image; append-only, fsynced, the resume point |
+| `results.csv` | every image: band, confidence, box, method, `duplicate_of`, error |
+| `summary.json` | band totals, duplicates, errors, processed/skipped, img/s, 10k ETA |
+| `errors.csv` | just the files that failed, so a 10k run's losses are visible at a glance |
+| `detected/`, `review/` | copies of the flagged originals, input tree mirrored |
+| `crops/` | the padded match box of each flagged image - the fast path for human review |

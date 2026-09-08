@@ -312,3 +312,80 @@ Two positives are still missed, and both are genuine detector failures:
 Comparison across the phase04 and phase05 numbers must state which label set it uses. On the
 **corrected** set: catch-recall 0.959 -> 0.980, precision 0.882 -> 0.873, review 7.0% -> 8.9%.
 Recall and the gate were bought for about one point of precision and two points of review pile.
+
+
+## D-030 - The journal is the source of truth for a scan (phase07)
+A run over the real collection takes hours. Hours are long enough for a laptop to sleep, a disk to
+fill, or a human to stop the run to look at something. Writing `results.csv` once at the end - what
+phases 01-05 did - means any of those loses everything.
+
+So `scan` appends one JSON line per finished image to `output/.progress.jsonl`, flushed **and
+fsynced** before the next image starts, and skips whatever that journal already holds when it
+starts again. The reports are then **rewritten from the journal** at the end of every run,
+including an interrupted one.
+
+Three consequences worth stating, because each was a choice:
+- **The CSV is a projection, never a thing to repair.** A half-written CSV is not a recovery
+  problem: delete it and re-run, and it comes back from the journal. Nothing appends to the CSV.
+- **A torn line costs one image.** Lines are independent JSON, so a power cut mid-write leaves an
+  unparseable tail that `journal.load` drops. The image is simply scanned again.
+- **Resume is keyed on the path relative to the scan root**, not on an index, so adding files to
+  `input/` between runs is safe: the new ones are scanned, the old ones are not.
+
+The trap this creates is stale verdicts: after `calibrate` changes a threshold, a plain re-run
+would happily reuse the *old* bands for every journaled image and quietly report numbers that no
+longer match the config. Hence `scan --restart`, which deletes the journal first. It is documented
+next to the thresholds for that reason.
+
+The summary file keeps its phase01 name, `summary.json` (the phase07 plan called it
+`results.json`) - it is a summary, three phases of docs and tests already call it that, and the
+rename would have bought nothing.
+
+
+## D-031 - Duplicates borrow the verdict and produce no artifacts (phase07)
+A collection assembled from a website is full of the same picture twice: byte-identical copies in
+two folders, and re-encodes that differ by a few JPEG artifacts. Each costs a full ~2 s signal
+pass, and - worse - each lands in `review/` as another image for the human to judge again.
+
+Every file is therefore hashed twice: SHA-256 over the bytes, and a 64-bit dHash over the
+downscaled pixels (`dedup.py`, written with OpenCV rather than adding an `imagehash` dependency).
+A byte match never reaches the decoder; a dHash within **4 bits** never reaches the pipeline. The
+copy takes the original's band, confidence, box and method, and records `duplicate_of` in the CSV.
+
+Two details that are not obvious:
+- **A duplicate is not copied into `detected/` or `review/`, and gets no crop.** Deduplicating and
+  then handing the human five copies anyway would defeat the purpose; the CSV still lists every
+  copy, with the path of the original it borrowed from.
+- **Flat images are excluded from perceptual matching.** dHash asks "is this pixel brighter than
+  its right-hand neighbour"; an all-black image and an all-white image both answer no everywhere
+  and hash to 0. Both hashes therefore prove nothing and are never matched (they still dedupe by
+  bytes). Without that guard a single solid-colour placeholder would swallow every other one.
+
+Only images that were actually scanned enter the index - not failures, not copies - so an
+unreadable file cannot lend its non-verdict to anything, and a copy of a copy points at the first
+original rather than forming a chain.
+
+
+## D-032 - Review artifacts mirror the input tree (phase07)
+`output/detected/`, `output/review/` and `output/crops/` reproduce the input's folder structure
+rather than flattening into one directory. Flattening reads better in Explorer right up to the
+first collision - a WordPress export has a `logo.png` in a dozen different months - and a silent
+overwrite there deletes evidence. Mirroring also means every artifact path maps back to the
+`filename` column of the CSV by construction.
+
+Crops are JPEG at quality 92 with 10% padding on each side: they are a contact sheet for a human
+deciding yes/no in a second, not evidence. The padding exists because a tight box cuts the mark's
+edges, which is exactly the context needed to judge it. Writing them goes through
+`cv2.imencode` + `open(...).write` rather than `cv2.imwrite`, for the same reason `load_image`
+uses `imdecode`: OpenCV cannot open non-ASCII Windows paths, and `ndarray.tofile` rejects the
+long-path prefix that `open` accepts.
+
+Nothing in `artifacts.py` may end a scan: a crop that fails to encode or a copy that hits a locked
+file comes back as a string that lands in the image's `error` column, and the run continues.
+
+Known limitation, stated rather than hidden: artifacts are written when an image is *processed*, so
+a resume does not backfill them. Scanning with `--no-artifacts` and then resuming without the flag
+leaves the first run's flagged images listed in the CSV but absent from `review/`. The fix is
+`--restart`, and the reason not to build backfilling is that it would mean keeping every scanned
+image's pixels or re-decoding the whole collection to produce a folder the CSV already describes.
+

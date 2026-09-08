@@ -37,5 +37,32 @@ python -m logoscanner scan --input input --output output
 - Manually review `output/review/` (use `crops/` for speed). Move confirmed images' labels into `data/labeled/` — this feeds the improvement loop (recalibrate anytime with the grown set).
 
 ## Progress Log
+- **2026-09-08 - steps 1-5 built.** Three new modules and a rewritten scan driver:
+  - `journal.py` - `output/.progress.jsonl`, one JSON line per image, flushed **and fsynced**
+    before the next starts. The journal is the source of truth; `results.csv`, `summary.json` and
+    `errors.csv` are rebuilt from it at the end of every run, interrupted ones included (D-030).
+    Torn lines are dropped, costing one image.
+  - `dedup.py` - SHA-256 over bytes plus a 64-bit dHash over pixels, written with OpenCV so no
+    dependency was added. A hit within 4 bits copies the original's verdict and runs no signal
+    (D-031). Flat all-black/all-white images are excluded from perceptual matching: both hash to 0,
+    which is not a similarity.
+  - `artifacts.py` - padded crop + a copy of the original into `detected/`/`review/`, input tree
+    mirrored so same-named files cannot collide (D-032). Never raises; a failed artifact becomes
+    that row's `error`.
+  - `cli.run_scan` - skips journaled paths, wraps every image in try/except, handles Ctrl-C
+    cleanly, shows live band counters on the bar, and prints a fuller end-of-run block. New flags
+    `--restart` (throw the journal away - required after a threshold change) and `--no-artifacts`.
+  - `results.py` - `duplicate_of` column, `write_errors`, and `summarize(..., processed=)` so a
+    resumed run reports the throughput it actually paid for instead of a fictional one.
+- **2026-09-08 - steps 6-7 done.** 56 new tests (208 -> 264 fast suite). Resume is proven two
+  ways: an in-process Ctrl-C whose resumed `results.csv` is **byte-identical** to an uninterrupted
+  run's, and a real `TerminateProcess` kill of a `python -m logoscanner scan` subprocess - no
+  cleanup, no buffer flush - after which the journal still holds complete entries and the resume
+  processes exactly the remainder. Dedup verified on an exact copy and a quality-40 re-encode
+  (1 pipeline call for 3 files), including across a resume, which proves the index is rebuilt from
+  the journal rather than held in memory.
+- **2026-09-08 - step 6 measured, no multiprocessing needed.** 200 real images: see the timing in
+  the Completion Report. ETA(10k) came in under the 12 h bar the plan set, so `--workers` was not
+  built and `multiprocessing` stayed out of the project.
 
 ## Completion Report

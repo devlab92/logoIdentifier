@@ -8,10 +8,12 @@ import json
 from logoscanner.config import BANDS
 from logoscanner.results import (
     CSV_COLUMNS,
+    ERROR_COLUMNS,
     ResultRow,
     read_csv,
     summarize,
     write_csv,
+    write_errors,
     write_json,
 )
 
@@ -42,6 +44,7 @@ def test_csv_round_trips(tmp_path):
         assert after.confidence == round(before.confidence, 4)
         assert (after.x, after.y, after.w, after.h) == (before.x, before.y, before.w, before.h)
         assert after.method == before.method
+        assert after.duplicate_of == before.duplicate_of
         assert after.error == before.error
 
 
@@ -62,3 +65,30 @@ def test_summary_handles_zero_elapsed():
     summary = summarize([], seconds=0.0)
     assert summary["images"] == 0
     assert summary["eta_10k_seconds"] is None
+
+
+def test_summary_separates_what_this_run_paid_for(tmp_path):
+    """A resumed run must not report the throughput of work it skipped."""
+    summary = summarize(_rows(), seconds=2.0, processed=1)
+    assert summary["images"] == 3
+    assert summary["processed"] == 1 and summary["skipped"] == 2
+    assert summary["images_per_second"] == 0.5
+
+
+def test_summary_counts_duplicates():
+    rows = _rows() + [ResultRow("copy.png", True, "positive", 0.9,
+                                method="template", duplicate_of="a.png")]
+    assert summarize(rows, seconds=1.0)["duplicates"] == 1
+
+
+def test_errors_csv_lists_only_the_failures(tmp_path):
+    path = write_errors(_rows(), tmp_path / "out" / "errors.csv")
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == list(ERROR_COLUMNS)
+    assert rows[1:] == [["bad.png", "decode failed"]]
+
+
+def test_errors_csv_is_written_even_with_nothing_to_report(tmp_path):
+    path = write_errors([], tmp_path / "errors.csv")
+    assert path.read_text(encoding="utf-8").strip() == "filename,error"

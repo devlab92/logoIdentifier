@@ -2,6 +2,42 @@
 
 > Newest first. One dated block per working session that changed the repo.
 
+## 2026-09-08 - phase07
+- **`scan` is now resumable, deduplicating and crash-proof, and the full collection has been
+  scanned.** See the phase07 completion report and the Production runs section of BENCHMARKS for
+  the numbers.
+- New `logoscanner/journal.py`: `output/.progress.jsonl`, one JSON line per processed image,
+  flushed **and fsynced** before the next image starts. A re-run skips every journaled path, so a
+  killed scan resumes where it stopped. The journal is the source of truth (D-030) - `results.csv`,
+  `summary.json` and `errors.csv` are rebuilt from it at the end of every run, interrupted ones
+  included, so the reports can never be half-written. A torn line is dropped and costs one image.
+- New `logoscanner/dedup.py`: SHA-256 over the bytes plus a 64-bit dHash over the pixels, both
+  written with OpenCV so **no dependency was added**. A byte match skips the decoder; a dHash
+  within 4 bits skips the pipeline and copies the original's verdict, recording `duplicate_of`
+  (D-031). Duplicates get no crop and no copy - deduplicating and then handing the human five
+  copies anyway would defeat the point.
+- New `logoscanner/artifacts.py`: `output/crops/` (the padded match box, JPEG, the fast path for
+  review), `output/detected/` and `output/review/` (copies of the flagged originals). All three
+  mirror the input's folder structure so same-named files in different folders cannot overwrite
+  each other (D-032). Nothing here can end a scan: a failed crop or copy becomes that row's error.
+- `cli.run_scan` rewritten around the journal: per-image try/except (a signal that raises costs one
+  image, not the run), clean `KeyboardInterrupt`, live band counters on the progress bar, and a
+  fuller end-of-run block naming the artifact folders. New flags `--restart` and `--no-artifacts`.
+- `--restart` exists because resume would otherwise silently reuse **stale verdicts** after
+  `calibrate` changes a threshold - the one real trap the journal creates (D-030).
+- `results.py`: new `duplicate_of` column, `errors.csv` writer, and `summarize(..., processed=)` so
+  a resumed run reports the throughput it actually paid for rather than a fictional img/s.
+- Measured before deciding on multiprocessing, as the plan required: ETA(10k) stayed under the 12 h
+  bar, so `--workers` was **not** built and `multiprocessing` stayed out of the project.
+- Tests: 208 -> 265 in the fast suite. New `test_journal.py`, `test_dedup.py`, `test_artifacts.py`,
+  `test_scan_resume.py`. Resume is proven twice - an in-process Ctrl-C whose resumed `results.csv`
+  is byte-identical to an uninterrupted run's, and a real `TerminateProcess` kill of a
+  `python -m logoscanner scan` subprocess (no cleanup, no buffer flush) after which the surviving
+  journal entries are all complete and the resume processes exactly the remainder.
+- Fixed while writing `artifacts.py`: `cv2.imwrite` cannot open non-ASCII Windows paths (the same
+  defect `load_image` already worked around) **and** `ndarray.tofile` rejects the long-path
+  prefix - crops are encoded in memory and written through Python's own `open`.
+
 ## 2026-09-08 - phase05
 - **The gate PASSED (D-029): catch-recall 0.980, precision 0.873, review share 8.9%, 0.45 img/s
   on the corrected labeled set. phase06 (fine-tuned nano detector) is skipped.** Calibrated over
