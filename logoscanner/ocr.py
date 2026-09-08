@@ -17,6 +17,7 @@ Matching notes:
 
 from __future__ import annotations
 
+import hashlib
 import re
 import threading
 
@@ -33,6 +34,11 @@ _WHITESPACE = re.compile(r"\s+")
 
 _engine_lock = threading.Lock()
 _engine = None
+
+# One-entry cache for `read_text`, keyed on image content (D-026).
+_read_lock = threading.Lock()
+_last_key = None
+_last_lines: list = []
 
 
 def get_engine():
@@ -105,12 +111,45 @@ def _to_bbox(polygon) -> BBox:
     return int(x0), int(y0), max(1, int(round(x1 - x0))), max(1, int(round(y1 - y0)))
 
 
+def _image_key(image: np.ndarray) -> tuple:
+    """Content fingerprint of an image, for the one-entry read cache."""
+    view = np.ascontiguousarray(image)
+    digest = hashlib.blake2b(view.view(np.uint8).reshape(-1), digest_size=16).digest()
+    return image.shape, str(image.dtype), digest
+
+
 def read_text(image: np.ndarray) -> list[tuple[str, float, BBox]]:
-    """Run OCR and return `(text, confidence, bbox)` per detected line."""
+    """Run OCR and return `(text, confidence, bbox)` per detected line.
+
+    Memoised on the *content* of the last image seen. Two consumers now want
+    the same text lines out of the same array - this signal, and
+    `proposals.text_regions` feeding the embedding signal - and OCR is by far
+    the most expensive stage in the pipeline (~4 s against ~10 ms to hash the
+    pixels). One entry is enough: the pipeline finishes an image before it
+    starts the next (D-026).
+    """
+    global _last_key, _last_lines
+    key = _image_key(image)
+    with _read_lock:
+        if key == _last_key:
+            return _last_lines
+
     result, _elapse = get_engine()(image)
-    if not result:
-        return []
-    return [(str(text), float(conf), _to_bbox(poly)) for poly, text, conf in result]
+    lines = (
+        []
+        if not result
+        else [(str(text), float(conf), _to_bbox(poly)) for poly, text, conf in result]
+    )
+    with _read_lock:
+        _last_key, _last_lines = key, lines
+    return lines
+
+
+def clear_read_cache() -> None:
+    """Forget the memoised OCR read (tests)."""
+    global _last_key, _last_lines
+    with _read_lock:
+        _last_key, _last_lines = None, []
 
 
 class OcrSignal:

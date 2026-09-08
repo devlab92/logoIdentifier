@@ -26,7 +26,7 @@ MAX_SIDE = 1600
 # --- Signals ---------------------------------------------------------------
 # Detectors the pipeline runs, in order. Names come from the registry in
 # `signals.py`; unknown names are rejected at startup.
-ENABLED_SIGNALS = ("ocr", "sift")
+ENABLED_SIGNALS = ("ocr", "sift", "emb")
 
 # OCR signal (phase02). A detected line must reach OCR_MIN_FUZZ similarity to a
 # brand term to count at all, and strings shorter than OCR_MIN_TEXT_LEN letters
@@ -67,6 +67,49 @@ SIFT_MAX_AREA_FRAC = 4.0
 SIFT_MIN_EDGE_PX = 8.0
 SIFT_MAX_EDGE_RATIO = 12.0
 
+# --- Region proposals (phase05) --------------------------------------------
+# The embedding signal cannot compare a whole photo against a logo variant: the
+# mark is a few percent of the pixels and its signature drowns. `proposals.py`
+# therefore cuts candidate boxes out of the image first. Sources, in priority
+# order: OCR line boxes (a stylised wordmark is still *text* to the detector,
+# even when it reads as gibberish), the SIFT projected quad, MSER stable
+# regions, and a coarse tile grid that guarantees coverage when the others find
+# nothing.
+PROPOSAL_MAX_REGIONS = 24
+
+# Each proposal is grown by this fraction of its own size: a tight text box
+# clips the symbol sitting next to the words.
+PROPOSAL_PAD_FRAC = 0.15
+
+# Boxes outside this area range (fraction of the image) are dropped - specks
+# carry no signal, and a near-full-frame crop is just the tile fallback again.
+PROPOSAL_MIN_AREA_FRAC = 0.0004
+PROPOSAL_MAX_AREA_FRAC = 0.90
+
+# Two proposals overlapping by more than this IoU are merged into their union.
+PROPOSAL_MERGE_IOU = 0.55
+
+# Coarse fallback grid (N x N tiles, plus the whole frame).
+PROPOSAL_TILE_GRID = 3
+
+# MSER stable-region detector: a logo on a flat background is exactly the kind
+# of blob it was built to find.
+PROPOSAL_MSER_DELTA = 5
+PROPOSAL_MSER_MIN_AREA = 120
+PROPOSAL_MSER_MAX_AREA_FRAC = 0.25
+
+# --- Embedding signal (phase05) --------------------------------------------
+# DINOv2-small via timm, CPU, no fine-tuning: a self-supervised ViT whose
+# features separate "this is the ZPE mark" from "this is some other logo"
+# without us training anything (D-024).
+EMB_MODEL = "vit_small_patch14_dinov2.lvd142m"
+EMB_INPUT_SIZE = 126  # multiple of the model's patch size (14)
+EMB_BATCH_SIZE = 24  # >= PROPOSAL_MAX_REGIONS: one forward pass per image
+# Torch threads; 0 leaves torch's own default alone.
+EMB_THREADS = 0
+# Cosine similarity below this is not even worth reporting as a partial match.
+EMB_MIN_SIMILARITY = 0.30
+
 # --- Confidence bands ------------------------------------------------------
 # Recall first: anything uncertain lands in REVIEW, never silently in NEGATIVE.
 BAND_POSITIVE = "positive"
@@ -87,10 +130,11 @@ REVIEW_THRESHOLD = 0.50
 # review, else negative (`decision.decide`). Signals with no entry here fall
 # back to FALLBACK_THRESHOLDS.
 # --- calibrated thresholds (written by `logoscanner calibrate`) ------------
-# Calibrated on the labeled set, 2026-09-04.
+# Calibrated on the labeled set, 2026-09-08.
 SIGNAL_THRESHOLDS: dict[str, tuple[float, float]] = {
     # signal: (weak, strong)
-    "ocr": (0.60, 0.95),
+    "emb": (0.85, 0.95),
+    "ocr": (0.75, 0.85),
     "sift": (0.45, 0.45),
 }
 # --- end calibrated thresholds ---------------------------------------------

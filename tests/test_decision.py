@@ -137,8 +137,18 @@ def test_to_row_leaves_the_box_empty_when_the_signal_cannot_localise():
     assert (row.x, row.y, row.w, row.h) == (None, None, None, None)
 
 
-def test_the_live_config_thresholds_are_used_by_default():
-    weak, strong = config.SIGNAL_THRESHOLDS["ocr"]
-    assert decide([SignalResult("ocr", strong)]).band == config.BAND_POSITIVE
-    assert decide([SignalResult("ocr", weak)]).band == config.BAND_REVIEW
-    assert decide([SignalResult("ocr", weak - 0.01)]).band == config.BAND_NEGATIVE
+@pytest.mark.parametrize("name", sorted(config.SIGNAL_THRESHOLDS))
+def test_the_live_config_thresholds_are_used_by_default(name):
+    """Every calibrated signal must band its own thresholds correctly.
+
+    A signal calibrated to `weak == strong` has *no* review band by design - it
+    either flags or stays silent, which is what OCR and SIFT came out as in
+    phase05 (D-028) - so the middle expectation depends on the shipped numbers
+    rather than assuming a gap exists.
+    """
+    weak, strong = config.SIGNAL_THRESHOLDS[name]
+    assert decide([SignalResult(name, strong)]).band == config.BAND_POSITIVE
+    assert decide([SignalResult(name, weak - 0.01)]).band == config.BAND_NEGATIVE
+
+    at_weak = decide([SignalResult(name, weak)]).band
+    assert at_weak == (config.BAND_REVIEW if weak < strong else config.BAND_POSITIVE)

@@ -116,8 +116,12 @@ def search(
 
     # Fold every signal but the last into one band vector, then let the last
     # signal's whole pair matrix broadcast against it.
+    # Results are kept as three flat float32 vectors, one entry per threshold
+    # combination, and the combination *index* is decoded arithmetically at the
+    # end. Materialising the index as a list of tuples costs ~1 GB once a third
+    # signal takes the grid to 9.3 M combinations (D-027).
     head, tail = matrices[:-1], matrices[-1]
-    precision_all, catch_all, review_all, keys = [], [], [], []
+    precision_all, catch_all, review_all = [], [], []
     for head_index in product(range(len(pairs)), repeat=len(head)):
         base = np.zeros(n_images, dtype=np.int8)
         for matrix, index in zip(head, head_index):
@@ -132,10 +136,11 @@ def search(
 
         with np.errstate(invalid="ignore", divide="ignore"):
             precision = np.where(flagged > 0, true_positive / np.maximum(flagged, 1), 0.0)
-        precision_all.append(precision)
-        catch_all.append(caught / n_positive if n_positive else np.zeros(len(pairs)))
-        review_all.append(in_review / n_images)
-        keys.extend((head_index, tail_index) for tail_index in range(len(pairs)))
+        precision_all.append(precision.astype(np.float32))
+        catch_all.append(
+            (caught / n_positive if n_positive else np.zeros(len(pairs))).astype(np.float32)
+        )
+        review_all.append((in_review / n_images).astype(np.float32))
 
     precision = np.concatenate(precision_all)
     catch = np.concatenate(catch_all)
@@ -159,13 +164,17 @@ def search(
 
     indices = np.flatnonzero(mask)
     # maximise precision, then catch-recall, then the smaller review pile
-    order = sorted(
-        indices,
-        key=lambda i: (precision[i], catch[i], -review[i]),
-        reverse=True,
+    # (np.lexsort's last key is the primary one; the winner is the last row)
+    order = np.lexsort((-review[indices], catch[indices], precision[indices]))
+    winner = int(indices[order[-1]])
+    # Decode the flat index: each head combination contributes len(pairs)
+    # entries, laid out in `product(...)` order.
+    block, tail_index = divmod(winner, len(pairs))
+    head_index = (
+        tuple(int(i) for i in np.unravel_index(block, (len(pairs),) * len(head)))
+        if head
+        else ()
     )
-    winner = int(order[0])
-    head_index, tail_index = keys[winner]
     thresholds = {
         name: pairs[index]
         for name, index in zip(signal_names, tuple(head_index) + (tail_index,))
@@ -350,5 +359,12 @@ def run_calibration(
     if not passed:
         written = write_gate_failures(records, metrics, thresholds, gate_path)
         print(f"wrote        : {written}")
+    else:
+        # A file left over from an earlier failing run would still say FAILED,
+        # which is exactly the sort of stale artifact someone acts on.
+        stale = Path(gate_path)
+        if stale.exists():
+            stale.unlink()
+            print(f"removed      : {stale} (stale, the gate now passes)")
 
     return payload

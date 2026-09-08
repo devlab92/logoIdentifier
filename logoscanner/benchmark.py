@@ -21,7 +21,7 @@ from logoscanner import config
 from logoscanner.metrics import CLASS_DIRS, score_images  # noqa: F401 (CLASS_DIRS re-export)
 
 # Stamped into every BENCHMARKS row; bump it when a phase changes the signals.
-PHASE = "phase04"
+PHASE = "phase05"
 # Coarse grid, 0.05 steps. Fine enough to see the shape, cheap enough to print.
 GRID = tuple(round(0.05 * i, 2) for i in range(1, 20))
 

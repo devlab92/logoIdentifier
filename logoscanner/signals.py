@@ -102,3 +102,4 @@ def _load_builtins() -> None:
         return
     from logoscanner import ocr  # noqa: F401  (import registers "ocr")
     from logoscanner import keypoints  # noqa: F401  (import registers "sift")
+    from logoscanner import embeddings  # noqa: F401  (import registers "emb")

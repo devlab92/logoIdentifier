@@ -229,3 +229,85 @@ def test_run_calibration_needs_readable_images(tmp_path):
     (tmp_path / "negative").mkdir()
     with pytest.raises(ValueError):
         run_calibration(tmp_path, [SilentSignal()], progress=False, apply=False, grid=GRID)
+
+
+def three_signal_records(n: int = 24) -> list[ScoredImage]:
+    """A set where each signal alone is partial, so the winner mixes all three."""
+    records = []
+    for index in range(n):
+        positive = index % 2 == 0
+        records.append(
+            ScoredImage(
+                filename=f"{index}.png",
+                label="positive" if positive else "negative",
+                scores={
+                    "ocr": 0.9 if positive and index % 6 == 0 else 0.1,
+                    "sift": 0.8 if positive and index % 6 == 2 else 0.05,
+                    "emb": 0.95 if positive and index % 6 == 4 else 0.4,
+                },
+            )
+        )
+    return records
+
+
+def test_search_decodes_the_winning_index_with_three_signals():
+    """The flat index is decoded arithmetically, not stored as tuples (D-027).
+
+    An off-by-one in that decoding would hand back thresholds belonging to a
+    different grid point, so the guard is that the winner reproduces its own
+    reported metrics through the shipping evaluator.
+    """
+    records = three_signal_records()
+    result = search(records, ("ocr", "sift", "emb"), grid=GRID)
+    assert set(result.best.thresholds) == {"ocr", "sift", "emb"}
+    assert result.evaluated == len(pair_grid(GRID)) ** 3
+
+    metrics = evaluate(records, result.best.thresholds)
+    assert metrics.precision == pytest.approx(result.best.precision)
+    assert metrics.catch_recall == pytest.approx(result.best.catch_recall)
+    assert metrics.review_share == pytest.approx(result.best.review_share)
+
+
+def test_search_scales_to_a_signal_count_without_materialising_the_index():
+    """9.3 M combinations at the shipped grid: the index must stay arithmetic."""
+    records = three_signal_records(8)
+    result = search(records, ("ocr", "sift", "emb"), grid=(0.2, 0.5, 0.8))
+    assert result.evaluated == len(pair_grid((0.2, 0.5, 0.8))) ** 3
+    assert evaluate(records, result.best.thresholds).catch_recall == pytest.approx(
+        result.best.catch_recall
+    )
+
+
+class LoudSignal:
+    """Fires on everything: catch-recall 1.0 and an empty review band, so the
+    gate passes by construction (precision is not one of its targets)."""
+
+    name = "ocr"
+
+    def run(self, image):
+        return SignalResult(self.name, 1.0)
+
+
+def test_a_passing_gate_removes_a_stale_failures_file(tmp_path, dummy_logo_path):
+    """A leftover FAILED file must not survive a run that passes."""
+    gate_path = tmp_path / "gate_failures.txt"
+    gate_path.write_text(
+        "# gate FAILED yesterday\nsomething.png - blind\n", encoding="utf-8"
+    )
+
+    labeled = tmp_path / "labeled"
+    make_synthetic.generate(
+        labeled, count=6, positive_ratio=0.5, logo_path=dummy_logo_path,
+        size=(60, 80), seed=3,
+    )
+    payload = run_calibration(
+        labeled,
+        [LoudSignal()],
+        progress=False,
+        apply=False,
+        grid=GRID,
+        output_path=tmp_path / "calibration.json",
+        gate_path=gate_path,
+    )
+    assert payload["gate"]["passed"] is True
+    assert not gate_path.exists()

@@ -3,7 +3,7 @@
 > Keep this file matching reality. Update on any behavioral change.
 
 ## Current state
-**phase04 done: the decision engine is calibrated and the ML gate FAILED (D-023).**
+**phase05 done: the embedding signal closed the recall gap and the gate PASSED (D-029).**
 `python -m logoscanner scan` walks a folder (`io_utils.iter_images`), loads each image safely
 (`io_utils.load_image`, downscaled to `config.MAX_SIDE`, decode failures recorded not raised,
 AVIF via a Pillow fallback), runs every signal in `config.ENABLED_SIGNALS` through
@@ -18,32 +18,48 @@ and verified by a RANSAC homography whose projected quad must be a believable lo
 (D-017); score is `min(1, inliers / SIFT_SCORE_NORM)`. An empty or missing `logo/` warns once
 and the signal scores 0, so a scan still runs on OCR alone.
 
+`embeddings.EmbeddingSignal` covers what neither of the others can see (D-024). `proposals.propose`
+first cuts candidate boxes out of the image - OCR line boxes (a stylised wordmark is still *text*
+to the detector even when it reads as gibberish), MSER stable regions grouped from per-letter
+blobs into whole marks, any box another signal passes in, and an always-kept 3x3 tile grid plus
+the full frame - padded, area-filtered, merged and capped at `PROPOSAL_MAX_REGIONS`. Each crop is
+embedded by a **frozen** DINOv2-small (no training, no labels) and scored by cosine similarity
+against every `logo/` variant, each of which is embedded on both a white and a black background.
+The score is the best crop-vs-variant cosine and the box is that crop. Whole images are never
+compared directly: a mark covering 2% of a photo barely moves that photo's global feature vector.
+Missing torch, a missing checkpoint or an empty `logo/` all degrade to "warn once, score 0".
+
 `decision.decide` gives each signal its own `(weak, strong)` pair from
 `config.SIGNAL_THRESHOLDS`, asks each which band it claims, and takes the best band claimed
-(D-021). Calibrated 2026-09-04: OCR 0.60/0.95, SIFT 0.45/0.45 - SIFT has no review band, it
-either flags or stays silent. `confidence` is the winner's score normalized onto the shared scale
-(weak → 0.50, strong → 0.85) and `method` names every signal that claimed the band.
+(D-021). Calibrated 2026-09-08 over all three signals on the corrected labeled set: OCR
+0.75/0.85, SIFT 0.45/0.45, EMB 0.85/0.95. SIFT collapses to a single bar - a homography-verified
+match is either convincing or noise, so it flags or stays silent - while OCR and the embedding
+signal both keep a real review band. `confidence` is the winner's score normalized onto the shared
+scale (weak → 0.50, strong → 0.85) and `method` names every signal that claimed the band.
 
 `python -m logoscanner calibrate --labeled <dir>` re-derives those four numbers and writes them
 back into `config.py`; `python -m logoscanner benchmark --labeled <dir> --signals ocr,sift`
 reports what each signal could do alone plus a naive-OR row (D-019), appending to
 `docs/BENCHMARKS.md`.
 
-Measured on the labeled set (100/158): precision **0.882**, catch-recall **0.940**, review share
-**7.0%**. The gate FAILED on catch-recall (target 0.97): 6 positives score 0 on both signals and
-no threshold can recover them, so **phase05 (embeddings) runs**; see `output/gate_failures.txt`.
-phase01 baseline was ~42 img/s for walk + decode + resize alone; OCR dominates the cost. See
-BENCHMARKS for throughput and the 10k ETA.
-
-Target design below.
+Measured on the corrected labeled set (98/160 - two positives turned out to carry no logo at all
+and were moved to `negative/`, D-028): precision **0.873**, catch-recall **0.980**, review share
+**8.9%** at 0.45 img/s. The gate **PASSED**, both targets met with no relaxation, and the
+attainable recall ceiling is 1.0 (D-029). The embedding signal is what cleared it, not the
+relabeling: phase04's detector re-scored on the corrected labels still reaches only 0.959. Two
+positives are still missed - a screenshot whose wordmark OCR garbles to two characters, and one
+product diagram the calibration chose to give up in exchange for precision. **phase06 is therefore
+unnecessary and is skipped** - next is phase07.
+phase01 baseline was ~42 img/s for walk + decode + resize alone; OCR still dominates the cost, with
+the embedding stage adding ~0.33 s/image. See BENCHMARKS for throughput and the 10k ETA.
 
 ## Target pipeline
 ```text
 image ──► OCR signal   (RapidOCR + fuzzy brand-term match)      ─┐
       ──► SIFT signal  (keypoints + Lowe ratio + RANSAC verify) ─┤► rule-based decision ──► positive / review / negative
-      ──► [conditional] region proposals + embedding similarity ─┤        │
-      ──► [conditional] fine-tuned nano detector                ─┘        ▼
-                                                              results.csv/json, crops/, detected/, review/
+      ──► EMB signal   (region proposals + frozen DINOv2 cosine)─┘        │
+                                                                         ▼
+          [skipped] fine-tuned nano detector - phase05 met the gate   results.csv/json, crops/, detected/, review/
 ```
 
 ## Key principles
@@ -52,6 +68,8 @@ image ──► OCR signal   (RapidOCR + fuzzy brand-term match)      ─┐
 - Thresholds come from **calibration on the labeled set**, never intuition: `calibrate` grid-searches them and writes them into `config.py`. Bands: positive / review / negative.
 - Signals are independent modules returning `SignalResult(score, bbox, method, detail)` so the decision layer stays pluggable.
 - CPU-first. Performance work only if measured ETA for 10k images exceeds ~12 h (then: multiprocessing before any GPU runtime).
+- Heavy models are used **frozen**, never fine-tuned (D-024): 100 positives is enough to memorise a dataset, not to learn a mark. Every model-backed stage must also degrade to "warn once, score 0" so a missing dependency can never abort a scan.
+- Expensive stages are computed once per image and shared: `ocr.read_text` is memoised on a content hash so the embedding stage's region proposals reuse the OCR pass instead of paying for it twice (D-026).
 
 ## Calibration flow
 ```text

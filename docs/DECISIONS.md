@@ -181,3 +181,134 @@ and no threshold can fix it: 6 positives score exactly 0 on *both* signals (list
 geometry, so the attainable ceiling is 0.940 (D-022) and the answer is a new signal.
 **phase05 (region proposals + embedding similarity) runs.**
 
+
+## D-024 - A frozen DINOv2-small is the third signal, and nothing is trained (phase05)
+The phase04 gate failed because 6 positives scored 0 on *both* OCR and SIFT (D-023): no readable
+brand text, no matchable keypoint geometry. Neither signal can be threshold-tuned into seeing
+them, so phase05 adds a detector that asks a different question - *does this region look like the
+logo?* - and answers it with cosine distance between DINOv2-small embeddings.
+
+DINOv2 is used **as downloaded**: no fine-tuning, no classifier head, no labels. That keeps the
+project inside its "free, local, offline" contract (hard rule 3) - the only cost is a one-off
+model download - and it avoids the trap of training a classifier on 100 positives, which would
+memorise this dataset rather than learn the mark.
+
+The dependency is the expensive part and was accepted explicitly by the user: `torch` (CPU build)
++ `timm`, ~2 GB on disk, plus an ~85 MB checkpoint fetched once from the HuggingFace hub. After
+that first download everything runs offline, on CPU, exactly like the rest of the pipeline. The
+signal degrades quietly in every failure mode - no torch, no checkpoint, no `logo/` - by warning
+once and scoring 0, so a scan still runs on OCR and SIFT alone.
+
+Two implementation choices worth recording:
+- **Whole images are never embedded against the logo.** A mark covering 2% of a photo barely
+  moves that photo's global feature vector, so the comparison would be noise. `proposals.py`
+  cuts candidate regions first and each *crop* is embedded; the score is the best crop-vs-variant
+  cosine, and the winning crop is the reported box.
+- **A transparent variant is flattened onto white *and* black**, giving two templates per file.
+  The same white wordmark sits on dark hero images and on light slides, and the background it is
+  composited onto moves its embedding a long way.
+
+Similarity is a plain NumPy dot product over L2-normalised vectors. With ~6 templates and ~24
+crops that is a 24x6 matrix multiply; an index like FAISS would cost more than it saves (D-004).
+
+## D-025 - OpenCV 5's MSER returns nothing for single-channel input (phase05)
+`cv2.MSER_create().detectRegions()` on a grayscale array returns an **empty** result in
+opencv-python 5.0.0 - no exception, no warning. The same image as 3-channel BGR returns the
+expected blobs. Converting to grayscale first is the natural thing to write (it is what
+`keypoints.py` does for SIFT) and it silently disables the whole MSER proposal source, which
+would have shown up only as slightly worse recall. `proposals.mser_regions` therefore forces its
+input to BGR, and `test_mser_accepts_grayscale_and_bgra` pins the behaviour so a future OpenCV
+upgrade cannot quietly undo it.
+
+Measured while chasing this: MSER keys on *stroke* regions. It finds text and wordmarks readily
+(both polarities - white-on-dark works fine), and returns nothing for one flat rectangle nested
+in another flat background. It also answers with one blob per **letter**, which is useless to an
+embedding model, so `group_boxes` dilates the blob mask sideways by about one character width and
+reads back connected components - gluing a word, and a symbol sitting next to it, into one
+region. The per-letter boxes are kept too, since a lone symbol mark is already whole.
+
+## D-026 - `ocr.read_text` is memoised on image content (phase05)
+The embedding signal wants OCR line boxes as its best region proposals - a stylised wordmark that
+fuzzy-matches no brand term is still *text* to the detector, and its box is exactly where the logo
+is. But OCR is by far the most expensive stage (~4 s per image against ~0.3 s for the whole
+embedding stage), and the `Signal` protocol gives detectors no way to share work: each one gets
+the image and nothing else. A naive `text_regions` call would therefore run OCR a second time and
+roughly double the cost of a scan.
+
+`read_text` now keeps a **one-entry** cache keyed on a blake2b hash of the pixels. Hashing a 1600px
+image costs ~5 ms against the ~4 s it saves, and one entry is all that is needed because the
+pipeline finishes an image before it starts the next. Keying on content rather than on `id(array)`
+means a recycled buffer can never serve a stale read - measured: 4.13 s cold, 0.004 s warm, and a
+single changed pixel correctly re-runs the engine.
+
+## D-027 - Calibration decodes its winning index arithmetically (phase05)
+`calibrate.search` used to record every grid point's identity in a `keys` list of tuples. With two
+signals that was 44,100 entries; a third signal takes it to 210^3 = **9.26 M**, and the list alone
+would allocate roughly 1 GB - the search would die on memory before it ever reported a threshold.
+
+The identity was never information, only arithmetic: entries are emitted in `product()` order, so
+the flat index decodes as `divmod(index, len(pairs))` plus `np.unravel_index` over the head
+signals. The three metric vectors are also stored as float32 rather than float64. The full
+three-signal search now runs in ~12 s in about 110 MB. Because a decoding slip would silently
+return the thresholds of the *wrong* grid point,
+`test_search_decodes_the_winning_index_with_three_signals` re-measures the winner through
+`metrics.evaluate` - the shipping path - and requires the numbers to agree.
+
+
+## D-028 - Two positives were mislabeled; the dataset is now 98/160 (phase05)
+`ZPE-Systems-Frank-Basso.webp` (200x200) and `fgJCL84Y.jpg` (300x300) sat in
+`data/labeled/positive/` and scored 0 on every signal through phases 02-05. They were among the
+six "blind" positives that failed the phase04 gate and were used to justify phase05.
+
+The user confirmed on 2026-09-08 that **neither image contains the logo at all.** The detector had
+been right about both and the labels were wrong. Both files moved to `data/labeled/negative/`,
+where they are useful hard negatives - ZPE-adjacent photos with no mark - and the labeled set is
+now **98 positive / 160 negative**.
+
+Two lessons worth keeping:
+- Mislabeled positives are not neutral. Calibration was spending threshold budget trying to catch
+  two images with nothing to find, which drags every threshold down. Removing them **improved all
+  three headline metrics at once** (below) - the usual recall/precision trade did not apply,
+  because this was noise, not difficulty.
+- A signal that scores 0 on every detector is as likely to be a label error as a hard case. Worth
+  checking the label before building a new detector for it. The agent could not check these two
+  itself: viewing company images is outside what it may do (hard rule 4), so this class of
+  question has to go to the user, and it is worth asking *early* - it was asked at the start of
+  phase05 and answered at the end.
+
+## D-029 - Recalibrated thresholds and the phase05 gate verdict: PASSED (2026-09-08)
+Calibrated on the corrected labeled set (98 positive / 160 negative, `ocr,sift,emb`, 9,261,000
+threshold combinations, `output/calibration.json`):
+
+| signal | weak (review) | strong (positive) |
+|---|---|---|
+| emb | 0.85 | 0.95 |
+| ocr | 0.75 | 0.85 |
+| sift | 0.45 | 0.45 |
+
+Result: precision **0.873**, catch-recall **0.980**, review share **8.9%**, 0.45 img/s
+(89 positives flagged, 7 to review, 2 missed; 13 negatives flagged, 16 to review).
+Signal wins: ocr 108, emb 15, sift 2.
+
+**GATE: PASSED** - both targets met with no relaxation (`feasible: true`), and the attainable
+recall ceiling is **1.0**: no image in the set is invisible to all three signals any more.
+**phase06 (fine-tuned nano detector) is unnecessary and is skipped.**
+
+**phase05 was necessary even after the label fix.** Re-deriving phase04's confusion matrix on the
+corrected labels (its two mislabeled misses simply become true negatives) gives precision 0.882,
+catch-recall **0.959**, review 7.0% - still short of the 0.97 target. The embedding signal, not
+the relabeling, is what cleared the gate.
+
+Two positives are still missed, and both are genuine detector failures:
+- `Screen-Shot-2020-09-23-at-8.33.59-PM.jpg` - OCR sees the wordmark but garbles it to a
+  2-character string at 0.54 confidence; no crop cleared the embedding bar.
+- `Untitled-1-1-1.png` - a product diagram. The embedding *did* catch this one at the looser
+  thresholds calibrated on the mislabeled set (emb 0.80/0.90); with cleaner labels the search
+  could afford to be stricter (emb 0.85/0.95) and chose the precision instead. That is the
+  objective working as specified - maximise precision once catch-recall clears 0.97 - and it is
+  the dial to turn if this image matters more than the four false positives that strictness buys
+  back.
+
+Comparison across the phase04 and phase05 numbers must state which label set it uses. On the
+**corrected** set: catch-recall 0.959 -> 0.980, precision 0.882 -> 0.873, review 7.0% -> 8.9%.
+Recall and the gate were bought for about one point of precision and two points of review pile.

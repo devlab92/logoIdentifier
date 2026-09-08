@@ -1,4 +1,4 @@
-# phase06 — Fine-tuned Nano Detector (CONDITIONAL, last resort)
+# phase06 — Fine-tuned Nano Detector (CONDITIONAL, last resort) — **SKIPPED**
 
 **Goal:** train a one-class nano object detector on the company's own annotated images to close the remaining recall gap.
 **Depends on:** phase05
@@ -35,3 +35,17 @@ pytest -q -m "not slow"
 ## Progress Log
 
 ## Completion Report
+
+**SKIPPED 2026-09-04 — not needed.** This phase runs only if the gate still failed after phase05.
+It did not: phase05's embedding signal took catch-recall from 0.940 to **0.970** against a 0.97
+target, with review share 9.7% inside the 10% cap (D-028). Both gate targets are met with no
+relaxation, and the attainable recall ceiling moved from 0.940 to 1.0.
+
+Nothing here was built, so nothing is owed. The hard human prerequisite this phase carried -
+bounding-box annotations on 100-300 positive images - is therefore **not required**, and no
+AGPL-licensed training dependency (`ultralytics`, D-006) entered the project.
+
+If recall ever regresses below target on a larger or different image set, this file is the plan to
+revive: re-read it, re-check the prerequisites, and move it back to `plans/active/`. The cheaper
+levers to try first are listed in phase05's completion report.
+

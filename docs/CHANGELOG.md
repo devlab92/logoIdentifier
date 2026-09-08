@@ -2,6 +2,48 @@
 
 > Newest first. One dated block per working session that changed the repo.
 
+## 2026-09-08 - phase05
+- **The gate PASSED (D-029): catch-recall 0.980, precision 0.873, review share 8.9%, 0.45 img/s
+  on the corrected labeled set. phase06 (fine-tuned nano detector) is skipped.** Calibrated over
+  three signals: emb 0.85/0.95, ocr 0.75/0.85, sift 0.45/0.45. Attainable recall ceiling 0.940 ->
+  1.0. Misses 6 -> 2.
+- **Two positives were mislabeled** (D-028): `ZPE-Systems-Frank-Basso.webp` and `fgJCL84Y.jpg`
+  contain no logo at all - the user confirmed it after they had been used to justify phase05.
+  Moved to `data/labeled/negative/`; the set is now **98/160**. Removing them improved precision,
+  recall *and* review share simultaneously, because they were noise rather than difficulty.
+- phase05 was still necessary: phase04's detector re-scored on the corrected labels reaches only
+  catch-recall 0.959, short of the 0.97 target.
+- Checked the cheap lever first: the symbol-only logo variant the user added to `logo/` is live
+  (3 SIFT templates, 120 descriptors on the symbol) but changed nothing - byte-identical metrics.
+- Diagnosed the six phase04 misses individually: two carry the product wordmark "Nodegrid" at
+  0.98-1.00 OCR confidence (out of scope by user decision - ZPE marks only), one is a wordmark
+  OCR garbles to two characters, two were the mislabeled photos above.
+- New `logoscanner/proposals.py`: candidate regions from OCR line boxes, MSER blobs grouped into
+  whole marks, caller-supplied boxes, and an always-kept 3x3 tile grid + full frame; padded,
+  area-filtered, IoU-merged and budget-capped.
+- New `logoscanner/embeddings.py`: `emb` signal - frozen DINOv2-small on CPU, each candidate crop
+  embedded in one batch and scored by max cosine against every `logo/` variant (alpha variants
+  composited on white *and* black). Degrades to "warn once, score 0" with no torch, no checkpoint
+  or no `logo/`. Added to `ENABLED_SIGNALS`.
+- Dependencies: `torch 2.14.0+cpu` + `timm 1.0.29` (~2 GB) plus an ~85 MB checkpoint fetched once
+  (D-024). User-approved. Verified to load fully offline with `HF_HUB_OFFLINE=1`.
+- Fixed: OpenCV 5's MSER silently returns nothing for single-channel input (D-025) - the obvious
+  grayscale conversion would have disabled the source with no error.
+- Fixed: MSER returns one blob per letter; `group_boxes` glues them into whole marks.
+- Fixed: region proposals re-ran OCR, doubling scan cost. `ocr.read_text` is now memoised on a
+  content hash (D-026): 4.13 s cold, 0.004 s warm, and a one-pixel change re-runs it.
+- Fixed: `calibrate.search` stored its grid index as tuples - ~1 GB at three signals. The index is
+  now decoded arithmetically and the metric vectors are float32 (D-027): 9.26 M combinations in
+  ~12 s, ~110 MB.
+- Fixed: a passing `calibrate` run now deletes a stale `output/gate_failures.txt` instead of
+  leaving a file that still says FAILED.
+- Fixed: `test_the_live_config_thresholds_are_used_by_default` assumed OCR keeps a review band. It
+  now covers every calibrated signal and adapts to `weak == strong`.
+- Tests: `tests/test_proposals.py` (26) and `tests/test_embeddings.py` (20, four marked `slow`),
+  plus three-signal and stale-gate-file cases in `test_calibrate.py`. `pytest.ini` registers the
+  `slow` marker; the fast suite is `pytest -m "not slow"`.
+- Measured: embedding stage ~0.33 s/image steady-state.
+
 ## 2026-09-04 - phase04: decision engine, calibration & THE GATE
 - `logoscanner/decision.py`: per-signal `(weak, strong)` thresholds, OR over the band each signal
   claims (not over raw scores), normalized confidence anchored on `REVIEW_THRESHOLD` /

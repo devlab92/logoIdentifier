@@ -10,3 +10,8 @@ rapidocr-onnxruntime
 # Second-chance decoder for formats OpenCV lacks (AVIF). Already pulled in by
 # rapidocr-onnxruntime; listed because we import it directly (D-016).
 pillow
+# Embedding signal (phase05, D-024). CPU build; on Windows the PyPI wheel is
+# already CPU-only, elsewhere install from https://download.pytorch.org/whl/cpu.
+# ~2 GB installed, plus an ~85 MB DINOv2 checkpoint fetched once on first use.
+torch
+timm
