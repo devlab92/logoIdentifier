@@ -1,7 +1,29 @@
 # Project Status
 
-**Current phase:** none (phase05 done)
-**Next phase:** phase07 - outputs, resume & polish (phase06 is SKIPPED, see below)
+**Current phase:** none (phase07 done)
+**Next phase:** phaseFinal - packaging + USER_GUIDE. **It is worth doing the review homework below
+first:** the 1,165 crops this run produced are the raw material for a recalibration, and phaseFinal
+ships whatever the thresholds say at that point.
+
+## The collection has been scanned (phase07, 2026-09-08)
+3,370 images, 2 h 06 m 45 s, **0 errors**, 0.42 img/s. 818 (24.3%) were duplicates whose verdict was
+copied instead of recomputed. Full numbers in BENCHMARKS -> Production runs.
+
+| where to look | what is in it |
+|---|---|
+| `output/crops/` | **1,165 crops - start here.** Just the matched box of each flagged image |
+| `output/detected/` | 843 images the scanner calls `positive` |
+| `output/review/` | 322 images it is unsure about |
+| `output/results.csv` | all 3,370 rows: band, confidence, box, method, `duplicate_of`, error |
+| `output/errors.csv` | empty but for its header - nothing failed |
+
+Duplicates are listed in the CSV (naming the original in `duplicate_of`) but deliberately **not**
+copied into `detected/`/`review/`: 461 redundant copies you do not have to look at twice.
+
+The scan is resumable - stop it any time and re-run the same command. **After changing a threshold,
+a signal or `logo/`, pass `--restart`**, or the old verdicts in `output/.progress.jsonl` are reused
+(D-030).
+
 **Gate state:** **PASSED** 2026-09-08 - catch-recall 0.980 >= target 0.97, review share 8.9% <=
 10%. Recorded in D-029. `output/gate_failures.txt` no longer exists because there is no gate
 failure to describe. **phase06 (fine-tuned nano detector) is unnecessary and was moved to
@@ -48,6 +70,11 @@ Two positives are still missed, both genuine detector failures:
   buys back, lower `emb` weak/strong - that is the dial.
 
 ## User homework (blockers owned by the human)
+- [ ] **Review `output/crops/` (fast) or `output/detected/` + `output/review/` (full images).**
+      Move what you confirm into `data/labeled/positive|negative/`, then re-run
+      `python -m logoscanner calibrate --labeled data\labeled`. The labeled set is 258 images and
+      the scan just produced 1,165 candidates - this is the single biggest available improvement to
+      the detector, and it needs a human, not more code.
 - [x] GitHub repo `devlab92/logoIdentifier` created, `origin` set, and **pushed** - the earlier
       permission block has cleared; `main` is up to date through phase05 (b88e5e8)
 - [x] Set the real `BRAND_TERMS` in `logoscanner/config.py` (`ZPE`, `ZPE Systems`)
@@ -72,3 +99,4 @@ Two positives are still missed, both genuine detector failures:
 | phase04 decision + calibration + GATE | done | 2026-09-04 | 92e9185 | per-signal thresholds, `calibrate` command, 161 tests; catch-recall 0.940 / precision 0.882 / review 7.0% *(old labels; 0.959 re-scored on corrected ones)*; **gate FAILED -> phase05** |
 | phase05 proposals + embeddings + GATE | done | 2026-09-08 | 60d5c10 | region proposals + frozen DINOv2-small (`emb`), torch/timm added, OCR read memoised, calibration search made scalable, 2 mislabeled positives found; catch-recall 0.980 / precision 0.873 / review 8.9% on 98/160; **gate PASSED -> phase06 SKIPPED** |
 | phase06 nano detector | **skipped** | 2026-09-08 | — | not needed: phase05 met the gate. No annotation work, no AGPL dependency |
+| phase07 hardening + THE RUN | done | 2026-09-08 | (see below) | resume journal, SHA-256 + dHash dedup, crops/detected/review, errors.csv, `--restart`/`--no-artifacts`, 269 tests. **Full collection scanned: 3,370 images, 2 h 06 m, 0 errors, 24.3% duplicates.** No multiprocessing: measured ETA(10k) 6 h 18 m, under the 12 h bar |

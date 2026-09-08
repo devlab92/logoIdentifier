@@ -4,8 +4,9 @@
 
 ## 2026-09-08 - phase07
 - **`scan` is now resumable, deduplicating and crash-proof, and the full collection has been
-  scanned.** See the phase07 completion report and the Production runs section of BENCHMARKS for
-  the numbers.
+  scanned: 3,370 images in 2 h 06 m, 0.42 img/s, `0 errors`.** 818 (24.3%) were duplicates whose
+  verdict was copied without a pipeline pass. 843 images landed in `detected/` and 322 in
+  `review/`, with a crop for every one. Full numbers in BENCHMARKS -> Production runs.
 - New `logoscanner/journal.py`: `output/.progress.jsonl`, one JSON line per processed image,
   flushed **and fsynced** before the next image starts. A re-run skips every journaled path, so a
   killed scan resumes where it stopped. The journal is the source of truth (D-030) - `results.csv`,
