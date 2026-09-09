@@ -47,6 +47,8 @@
 ## tools/
 `tools/check_dataset.py` — Prints counts and file-size stats for `data/labeled/positive|negative`. | `main(argv)`, `_stats()`. | `logoscanner.io_utils`. | Changing the dataset layout or the stats reported.
 
+`tools/labels_from_crops.py` — Repairs a labeled set into which `output/crops/` files were sorted directly: finds each crop's source image in `output/results.csv` and copies **that** into the same class, retiring the crop to `--backup` (D-033). | `main(argv)`, `choose_candidate()` (same-stem collisions settled by regenerating each candidate's crop and comparing dHashes), `regenerated_hash()`, `flat_name()` (`<YYYY-MM>__<name>`, since the labeled folders are flat), `head_of()`, `has_box()`. Reports conflicts and disagreements with existing labels instead of resolving them; `--dry-run` changes nothing. | `logoscanner.{artifacts,dedup,io_utils,results}`. | If the crop naming or the labeled-set layout changes.
+
 `tools/make_dummy_logo.py` — Generates the committable fake mark `pytest.ini` — Pytest config: `testpaths`, and the `slow` marker registration for the model-backed embedding tests (`-m "not slow"` is the fast suite).
 
 `tests/assets/dummy_logo.png` (720x240 RGBA: hexagon with interior detail + "ACME" + tagline). The interior detail exists so the SIFT signal is testable at production thresholds (D-018). | `make_logo()`, `main(argv)`. | cv2, numpy. | If tests need a different fake logo. Never put the real logo here.
@@ -77,6 +79,8 @@
 `tests/test_dedup.py` — SHA-256 identity, dHash stability across recompression and rescaling vs. separation of different pictures, the hex round-trip, and `DuplicateIndex` (exact hit, near hit inside the bit budget, distance budget respected, closest match wins, flat all-black/all-white images never matching each other). | — | `logoscanner.dedup`, cv2. | When the hashing or the distance budget changes.
 
 `tests/test_decision.py` — Per-signal truth table, the OR rule across signals on different scales, winner ordering and the `a+b` method string, fallback thresholds, the normalized confidence scale (anchors, monotonicity, degenerate spans, band/confidence agreement), box and `to_row` handling. | — | `logoscanner.decision`. | When the banding rules or the confidence scale change.
+
+`tests/test_labels_from_crops.py` — The cases where the repair tool must refuse to guess: a crop replaced by its source image, a filename shared by two months settled by content, duplicate rows resolving to the scanned original, an already-labeled original not copied twice, a contradicted label reported and left alone, one original labeled both ways skipped, an unmatched crop reported, `--dry-run` inert, `flat_name`, and `is_crop` anchoring at the end of the stem so `cropped-flavicon.png` survives. | — | `labels_from_crops`, `logoscanner.artifacts`, cv2. | When the repair rules change.
 
 `tests/test_metrics.py` — A 10-image mini-set whose bands are hand-checked: precision / catch-recall / review share, confusion counts, per-signal wins, threshold sensitivity, empty input, `score_images` over both classes (filenames, per-signal seconds, unreadable files, `--limit`), `as_dict`, `format_metrics`. | — | `logoscanner.metrics`, `make_synthetic`. | When a metric or the scoring record changes.
 

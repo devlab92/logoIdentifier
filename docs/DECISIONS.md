@@ -389,3 +389,72 @@ leaves the first run's flagged images listed in the CSV but absent from `review/
 `--restart`, and the reason not to build backfilling is that it would mean keeping every scanned
 image's pixels or re-decoding the whole collection to produce a folder the CSV already describes.
 
+
+## D-033 - Crops are for reviewing, never for calibrating (phase07 follow-up)
+The phase07 homework said to review `output/crops/` and move what was confirmed into
+`data/labeled/`. That is exactly what happened - **the crop files themselves** were sorted into
+`positive/` and `negative/`, 1,121 of them. The judgement was sound; the file it was recorded
+against was not.
+
+A crop is not the image the scanner meets at scan time, and the difference is measurable. Scoring
+30 confirmed-positive crops against the full originals they were cut from, through the real
+pipeline:
+
+| signal | crops (mean / median) | full images (mean / median) |
+|---|---|---|
+| ocr | 0.705 / 0.963 | **0.864** / 0.978 |
+| emb | 0.810 / 0.803 | **0.835** / 0.831 |
+| sift | 0.261 / 0.160 | **0.316** / 0.420 |
+
+Catch-recall on those same 30 images: **0.867 as crops, 1.000 as full images.** Four crops of a
+human-confirmed logo do not re-detect as logos at all.
+
+**The direction is the opposite of the intuition, and worth stating because it caught me out.** A
+crop looks like it should be the easy case - the mark fills the frame, nothing to search for. But
+the crop is cut from an already-downscaled image and re-encoded as JPEG q92, and it is then
+letterboxed down to 126 px for the embedding and handed to OCR at a fraction of the original
+resolution. Small text loses the pixels OCR needs to read it. **A crop is a harder image than its
+own source, not an easier one.**
+
+Either direction, the distribution is wrong. Calibrating on crops would have dragged every
+threshold *down* to keep catching them, and those looser thresholds then meet full images at scan
+time - a bigger review pile and more false positives, with metrics that look fine because they were
+measured on the wrong population. That failure is silent, which is what makes it worth a decision
+entry.
+
+The fix is `tools/labels_from_crops.py`: for each `*_crop.*` file in the labeled folders it finds
+the source image in `output/results.csv` and copies **that** in, then retires the crop to
+`.crop_labels_backup/` (never deletes). Same-stem collisions - a WordPress export reuses filenames
+across months - are settled by *content*: each candidate's crop is regenerated from its recorded box
+and compared to the labeled file by dHash, which resolved all 124 ambiguous cases and the 9 that
+naive stem-matching had mislabeled as contradictions. Copies are renamed `<YYYY-MM>__<name>` because
+the labeled folders are flat and 21 crops had already been lost to silent overwrites on the way in.
+
+Result: the labeled set went from 98/160 (258) to **541/735 (1,276)** full images.
+
+### A crop proves presence, never absence
+15 images came out of the review contradicting a label from phases 02-05, and the direction was
+lopsided: **11 had been positive and the crop said negative, 4 the reverse.** That asymmetry is the
+tell. A crop shows only the box *the detector* matched, so:
+- seeing the mark in a crop is strong evidence the image is positive - there is no plausible way to
+  hallucinate the logo into it;
+- *not* seeing it only says that box was not the mark. The logo may sit somewhere the crop does not
+  cover.
+
+So the two directions do not deserve equal trust, and the user chose accordingly (2026-09-09): the
+4 negative -> positive flips were accepted, the 11 positive -> negative were not - their older
+full-image label stands. This is the recall-first rule (hard rule 5) applied to labeling rather than
+to thresholds. All 15 crops are in `.crop_labels_backup/disagreements/` if anyone wants to revisit
+them against the full images.
+
+The same asymmetry is why the next item matters:
+- **193 of the negative labels came from crops that OCR never flagged** (emb or sift only). A crop
+  shows only the region *the detector* matched, so "no logo here" is not the same statement as "no
+  logo in this image" - if the detector boxed the wrong thing and the mark sits elsewhere, that
+  negative label is wrong, and a wrong negative pushes calibration toward *rejecting* a real logo.
+  These are the least reliable labels in the set; the calibration's false-positive list is where
+  they surface.
+
+Detection of a crop must anchor at the end of the stem, not test `"_crop" in stem`: the substring
+test pulled a legitimate image named `cropped-flavicon.png` out of the labeled set.
+

@@ -7,6 +7,7 @@ __pycache__/
 *.egg-info/
 
 # Private data — never commit company material
+.crop_labels_backup/
 input/
 output/
 logo/
