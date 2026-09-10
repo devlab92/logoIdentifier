@@ -290,10 +290,12 @@ def run_calibration(
     output_path: str | Path = CALIBRATION_PATH,
     config_path: str | Path = CONFIG_PATH,
     gate_path: str | Path = GATE_FAILURES_PATH,
+    cache_path: str | Path | None = None,
 ) -> dict:
     """Score, search, publish. Returns the dict written to `calibration.json`."""
     records, meta = score_images(
-        labeled_dir, signal_names or config.ENABLED_SIGNALS, limit=limit, progress=progress
+        labeled_dir, signal_names or config.ENABLED_SIGNALS, limit=limit, progress=progress,
+        cache_path=cache_path,
     )
     # Names come back from the scorer: callers may pass built signal objects.
     names = tuple(meta["signals"])
@@ -308,6 +310,9 @@ def run_calibration(
 
     print()
     print(format_metrics(metrics, thresholds))
+    if meta.get("reused_from_cache"):
+        print(f"reused       : {meta['reused_from_cache']} cached score(s); "
+              f"scored {meta['scored']} new image(s)")
     print(f"searched     : {result.evaluated} threshold combinations")
     if result.relaxed_to is not None:
         print(

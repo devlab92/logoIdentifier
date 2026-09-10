@@ -2,6 +2,29 @@
 
 > Newest first. One dated block per working session that changed the repo.
 
+## 2026-09-10 - near-miss harvest, score cache, final calibration
+- **Harvested the detector's blind spots.** `audit_negatives.py --near-miss` serves the images that
+  came closest to the review line instead of a random sample; the user's review of 423 of them found
+  **19 hidden logos** (4.5%, against 2% by chance) plus **404 confirmed hard negatives**. Labeled set
+  **1,276 -> 1,759**. A near-miss sample refuses to report a miss rate - a sample the detector chose
+  cannot measure the detector.
+- Fixed the recall formula in `audit_negatives.py`: it divided by *flagged images* rather than
+  confirmed logos, reading 97.7% where the honest figure is **94.6%** - either side of the 0.97
+  target. Pinned by a test, since the absence of one is what let it ship.
+- New `logoscanner/scorecache.py` (D-035): per-image scores are remembered in `output/scores.json`
+  and only uncached images are scored. Applying the final thresholds took **41 seconds instead of an
+  hour**. The documented "label more, recalibrate" loop is only usable at that price. `--no-cache`
+  covers the one hazard the cache cannot see: a signal that changed behaviour under the same name.
+- **Retracted D-034's claim that the review cap was "the lever" for precision** (D-036). Sweeping it
+  from 10% to 50% on the cached scores leaves the human workload **identical - 1,162 images at every
+  setting** - and the losses identical at 14. It only moves junk from `detected/` into `review/`. The
+  cap stays at 10%, because that keeps 98% of findable logos in `detected/` for a reader who opens
+  one folder, against 46% at 50%.
+- **Final calibration: emb 0.85/0.90, ocr 0.65/0.75, sift 0.30/0.30. precision 0.540, catch-recall
+  0.973, review 9.6%, GATE PASSED.** Chosen over the previous thresholds, which reach catch-recall
+  only 0.959 on this set and lose 23 logos instead of 15.
+- Tests 290 -> 302.
+
 ## 2026-09-09 - labeled-set repair, recalibration, and an honest look at precision
 - **The labeled set was rebuilt from crops into full images** (D-033): the phase07 homework was
   followed literally and the `output/crops/` files themselves were sorted into

@@ -514,3 +514,66 @@ images for a human to check, then counted into a miss rate with a Wilson confide
 interval matters: 0 hits out of 100 is not a proven zero, it is "under about 3.7%", which over 1,387
 unique negatives is still up to ~51 missed logos.
 
+
+## D-035 - Per-image scores are cached, so recalibrating is cheap (phase07 follow-up)
+Scoring *is* calibration's cost. On 1,759 labeled images it is about an hour; judging 9.26 million
+threshold combinations against those scores takes 12 seconds. Every re-run - one more target, five
+hundred newly labeled images - was repeating the hour to recompute numbers that had not changed.
+
+`logoscanner/scorecache.py` writes them to `output/scores.json` keyed by filename, and
+`metrics.score_images(cache_path=...)` scores **only what the cache lacks**. Applying the final
+thresholds took **41 seconds** instead of an hour, and the review-budget experiment below - seven
+full grid searches - became possible at all.
+
+This matters beyond convenience. The documented long-term workflow is "label more, recalibrate",
+and a loop that costs an hour per turn is a loop nobody takes.
+
+Two hazards, handled differently on purpose:
+- **A different signal set** invalidates every score, and the cache detects it: it records which
+  signals it holds and is discarded whole if that list changes.
+- **The same signal, changed behaviour** it cannot detect - the name is identical and the scores
+  look fine. That is what `calibrate --no-cache` is for, and `test_a_changed_signal_is_the_users_job_to_declare`
+  pins the hazard rather than pretending it is handled.
+
+Labels are always read from where the file sits *now*, never from the cache: an image moved from
+`negative/` to `positive/` keeps its scores - the pixels did not change - but reusing its old label
+would optimise against a judgement the human already overturned.
+
+The cache is derived state. Deleting it is always safe and costs exactly one re-score.
+
+
+## D-036 - The review budget sorts work, it does not reduce it (phase07 follow-up)
+`detected/` was 56% correct on the production run, and D-034 blamed the 10% review cap: with review
+full and recall to protect, a borderline image has nowhere to go but `positive`. The obvious fix was
+to loosen the cap. **Measured on the cached scores, that fix does not exist.**
+
+| review cap | `detected/` | `review/` | logos lost | images to open |
+|---|---|---|---|---|
+| 10% | 537 logos + 457 junk | 9 + 159 | 14 | **1,162** |
+| 20% | 507 + 370 | 39 + 246 | 14 | **1,162** |
+| 25% | 453 + 314 | 93 + 302 | 14 | **1,162** |
+| 40% | 337 + 167 | 209 + 449 | 14 | **1,162** |
+| 50% | 252 + 63 | 294 + 553 | 14 | **1,162** |
+
+The human workload is **identical at every setting**, and so is the number of logos lost. Raising
+the cap makes `detected/` look cleaner (54% -> 80% correct) purely by moving 679 junk images into
+`review/`. It is a presentation choice, not an efficiency lever, and D-034 was wrong to call it
+"the lever".
+
+**So the cap stays at 10%,** and the reason is the reader who only opens `detected/`: at 10% that
+folder holds 537 of the 546 findable logos (98%); at 50% it holds 252 (46%). A tighter cap is worse
+for the person who reads everything and much better for the person who reads one folder - and the
+second person is the realistic one.
+
+What would actually reduce the work is better *separation* between logo and non-logo, which is a
+signal problem, not a threshold problem. That is the honest ceiling of the current detector.
+
+### Final calibration (2026-09-10, 561 positive / 1,198 negative)
+emb 0.85/0.90, ocr 0.65/0.75, sift 0.30/0.30. precision **0.540**, catch-recall **0.973**, review
+**9.6%**, 15 misses. Confusion - positives 537 / 9 / 15, negatives 457 / 159 / 582. Wins: ocr 920,
+emb 204, sift 38. **GATE PASSED.**
+
+Chosen over the previous thresholds on the same set, which scored precision 0.578 but catch-recall
+**0.959** - below the 0.97 target - and lost 23 logos instead of 15. The trade is about 19 extra
+images opened per extra logo recovered, and recall-first (hard rule 5) settles it.
+

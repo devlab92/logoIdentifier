@@ -79,13 +79,21 @@ def score_images(
     signal_names,
     limit: int | None = None,
     progress: bool = True,
+    cache_path: str | Path | None = None,
 ) -> tuple[list[ScoredImage], dict]:
     """Run every signal over `positive/` + `negative/`, keeping per-file scores.
 
     Images are loaded once and shown to every signal, so adding a signal costs
     only that signal's own time. Unreadable files are collected in the meta
     rather than raised.
+
+    With `cache_path`, images already scored by this same signal set are read
+    back instead of recomputed and only the new ones are paid for (D-035); the
+    cache is rewritten with everything at the end. Scoring is the entire cost of
+    calibration, so this is what makes "label more, recalibrate" cheap.
     """
+    from logoscanner import scorecache
+
     labeled_dir = Path(labeled_dir)
     signals = build_all(signal_names)
     names = tuple(signal.name for signal in signals)
@@ -97,11 +105,18 @@ def score_images(
             paths = paths[:limit]
         jobs.extend((path, label) for path in paths)
 
+    cached = scorecache.load(cache_path, names) if cache_path else {}
     records: list[ScoredImage] = []
     errors: list[str] = []
+    reused = 0
     signal_seconds = {name: 0.0 for name in names}
     start = time.perf_counter()
     for path, label in tqdm(jobs, desc="scoring", unit="img", disable=not progress):
+        known = scorecache.reuse(cached, path.name, label) if cached else None
+        if known is not None:
+            records.append(known)
+            reused += 1
+            continue
         image, error = load_image(path)
         if error:
             errors.append(f"{path.name}: {error}")
@@ -114,6 +129,10 @@ def score_images(
         records.append(ScoredImage(filename=path.name, label=label, scores=scores))
     seconds = time.perf_counter() - start
 
+    if cache_path and records:
+        scorecache.save(cache_path, records, names)
+
+    scored = len(records) - reused
     meta = {
         "labeled": str(labeled_dir),
         "signals": list(names),
@@ -123,7 +142,9 @@ def score_images(
         "errors": errors,
         "seconds": seconds,
         "signal_seconds": signal_seconds,
-        "images_per_second": len(records) / seconds if seconds > 0 else 0.0,
+        "reused_from_cache": reused,
+        "scored": scored,
+        "images_per_second": scored / seconds if seconds > 0 and scored else 0.0,
     }
     return records, meta
 

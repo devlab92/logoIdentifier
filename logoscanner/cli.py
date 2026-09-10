@@ -21,6 +21,7 @@ from logoscanner.calibrate import run_calibration
 from logoscanner.io_utils import iter_images, load_image
 from logoscanner.journal import JOURNAL_NAME, Journal, JournalEntry
 from logoscanner.pipeline import build_pipeline
+from logoscanner.scorecache import CACHE_NAME
 from logoscanner.results import (
     CSV_NAME,
     ERRORS_NAME,
@@ -289,6 +290,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report the thresholds but do not write them into config.py",
     )
+    cal.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="ignore output/scores.json and re-score every image (do this after "
+             "changing a signal, which invalidates every stored score)",
+    )
+    cal.add_argument(
+        "--cache",
+        default=None,
+        help="where per-image scores are remembered (default: output/scores.json). "
+             "Only new images are scored, so recalibrating after labeling more is cheap",
+    )
 
     sub.add_parser("version", help="print the version and exit")
     return parser
@@ -349,12 +362,16 @@ def main(argv: list[str] | None = None) -> int:
         if not labeled_dir.is_dir():
             print(f"error: labeled folder not found: {labeled_dir}")
             return 2
+        cache_path = None
+        if not args.no_cache:
+            cache_path = Path(args.cache) if args.cache else Path("output") / CACHE_NAME
         run_calibration(
             labeled_dir,
             signal_names,
             limit=args.limit,
             progress=not args.no_progress,
             apply=not args.no_apply,
+            cache_path=cache_path,
         )
         return 0
 

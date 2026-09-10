@@ -77,7 +77,16 @@ needs no network. Engine start-up costs ~2 s once per process.
 | `python tools\check_dataset.py [--root data/labeled]` | counts + size stats for the labeled dataset | phase01 |
 | `python tools\wp_collect.py [--dry-run] [--dedupe] [--source DIR] [--dest DIR] [--years 2014-2026]` | collect one original per image from a WordPress `uploads/` tree into `input\wp_originals\<YYYY-MM>\<original name>` + a manifest CSV | side tool |
 | `python -m logoscanner benchmark --labeled data/labeled [--signals ocr,sift] [--limit N] [--no-progress] [--no-record] [--note "..."]` | score every signal over `positive/` + `negative/`, sweep the (review, positive) threshold grid, print the table and append a row to `docs/BENCHMARKS.md` (`--no-record` skips the row); several signals also get a combined naive-OR row | phase02, combined row phase03 |
-| `python -m logoscanner calibrate --labeled data/labeled [--signals ocr,sift,emb] [--limit N] [--no-progress] [--no-apply]` | score the labeled set once, grid-search each signal's `(weak, strong)` thresholds, print the metrics + gate verdict, write `output/calibration.json`, rewrite the calibrated block in `logoscanner/config.py` (`--no-apply` skips that) and, when the gate fails, write `output/gate_failures.txt` | phase04 |
+| `python -m logoscanner calibrate --labeled data/labeled [--signals ocr,sift,emb] [--limit N] [--no-progress] [--no-apply] [--no-cache]` | score the labeled set once, grid-search each signal's `(weak, strong)` thresholds, print the metrics + gate verdict, write `output/calibration.json`, rewrite the calibrated block in `logoscanner/config.py` (`--no-apply` skips that) and, when the gate fails, write `output/gate_failures.txt` | phase04, score cache phase07 |
+
+### Recalibrating after labeling more (the improvement loop)
+`calibrate` remembers per-image scores in `output/scores.json` and only scores images the cache
+does not have (D-035), so a re-run after adding labels costs those images, not the whole set -
+seconds instead of an hour. Two rules:
+- **Changed a signal's code, `logo/`, or a signal tunable in `config.py`? Pass `--no-cache` once.**
+  The cache cannot tell that a signal with the same name now behaves differently, and would serve
+  stale scores without a word.
+- Deleting `output/scores.json` is always safe. It costs exactly one full re-score.
 
 ## Smoke test (phase07 verify)
 ```powershell
