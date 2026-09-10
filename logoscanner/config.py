@@ -130,12 +130,12 @@ REVIEW_THRESHOLD = 0.50
 # review, else negative (`decision.decide`). Signals with no entry here fall
 # back to FALLBACK_THRESHOLDS.
 # --- calibrated thresholds (written by `logoscanner calibrate`) ------------
-# Calibrated on the labeled set, 2026-09-08.
+# Calibrated on the labeled set, 2026-09-09.
 SIGNAL_THRESHOLDS: dict[str, tuple[float, float]] = {
     # signal: (weak, strong)
-    "emb": (0.85, 0.95),
-    "ocr": (0.75, 0.85),
-    "sift": (0.45, 0.45),
+    "emb": (0.90, 0.95),
+    "ocr": (0.75, 0.80),
+    "sift": (0.30, 0.30),
 }
 # --- end calibrated thresholds ---------------------------------------------
 

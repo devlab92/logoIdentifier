@@ -2,6 +2,36 @@
 
 > Newest first. One dated block per working session that changed the repo.
 
+## 2026-09-09 - labeled-set repair, recalibration, and an honest look at precision
+- **The labeled set was rebuilt from crops into full images** (D-033): the phase07 homework was
+  followed literally and the `output/crops/` files themselves were sorted into
+  `data/labeled/`. Measured on 30 confirmed positives, a crop scores *lower* than the image it was
+  cut from (ocr 0.705 vs 0.864 mean; catch-recall 0.867 vs 1.000) - it is re-compressed, letterboxed
+  and handed to OCR at a fraction of the resolution, so it is the harder image, not the easier one.
+  Calibrating on crops would have dragged every threshold down and loosened the shipped scanner,
+  with metrics that looked fine because they were measured on the wrong population.
+- New `tools/labels_from_crops.py`: recovers each crop's source image and copies that in instead,
+  retiring crops to `.crop_labels_backup/` (never deletes). Same-stem collisions across months are
+  settled by regenerating each candidate's crop and comparing dHashes, which resolved all 124
+  ambiguous cases. **Labeled set 258 -> 1,276 full images (541/735).**
+- Recorded the asymmetry the review exposed: **a crop proves presence, never absence.** Of 15
+  labels the review contradicted, the 4 negative -> positive flips were accepted and the 11
+  positive -> negative were not (D-033).
+- **Recalibrated (D-034): emb 0.90/0.95, ocr 0.75/0.80, sift 0.30/0.30. precision 0.578,
+  catch-recall 0.989, review 9.2%, GATE PASSED.**
+- **Precision did not fall from 0.873 to 0.578 - the ruler got honest.** The new negatives are
+  adversarial by construction (~610 are production false positives a human rejected), where
+  phase05's were images nothing had ever flagged. Graded directly on the 3,370-image run, the
+  shipped detector gets `detected/` **56.1%** right and `review/` 19.7%. That was always true; it
+  had never been measured.
+- Diagnosed *why* `detected/` carries 358 false positives: `TARGET_REVIEW_SHARE = 0.10` is a binding
+  constraint at 1,276 images, so borderline images have nowhere to go but `positive`. The review
+  budget, not a threshold, is the lever.
+- New `tools/audit_negatives.py`: every recall figure so far is circular - measured on positives the
+  detector itself found. This samples the `negative` band at random, copies the full images out for
+  a human, and reports a miss rate with a Wilson interval (0/100 is "under ~3.7%", not zero).
+- Tests 265 -> 290.
+
 ## 2026-09-08 - phase07
 - **`scan` is now resumable, deduplicating and crash-proof, and the full collection has been
   scanned: 3,370 images in 2 h 06 m, 0.42 img/s, `0 errors`.** 818 (24.3%) were duplicates whose

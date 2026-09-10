@@ -22,6 +22,7 @@
 | 2026-09-08 | phase05 | 98/160 | emb | 1.000 | 1.000 | 86.8% | 1.42 | t_rev=0.45 t_pos=0.95; phase05 re-run on corrected labels (98/160): ZPE-Systems-Frank-Basso.webp + fgJCL84Y.jpg confirmed logo-free by the user and moved to negative/ |
 | 2026-09-08 | phase05 | 98/160 | ocr+sift+emb | 0.876 | 1.000 | 34.9% | 0.45 | t_rev=0.70 t_pos=0.95; naive OR; phase05 re-run on corrected labels (98/160): ZPE-Systems-Frank-Basso.webp + fgJCL84Y.jpg confirmed logo-free by the user and moved to negative/ |
 | 2026-09-08 | phase05 | 98/160 | ocr+sift+emb (calibrated) | 0.873 | 0.980 | 8.9% | 0.45 | **project baseline.** Calibrated bands on the corrected label set, not a sweep: emb 0.85/0.95, ocr 0.75/0.85, sift weak=strong=0.45. Confusion pos 89/7/2, neg 13/16/131; wins ocr=108 emb=15 sift=2. **GATE PASSED** (catch-recall 0.980 >= 0.97, review 8.9% <= 10%); ceiling 1.000. The two misses are `Screen-Shot-2020-09-23...` and `Untitled-1-1-1.png`. Rows marked ~~100/158~~ above predate the label fix and are not comparable. The four sweep rows pick their own recall-first point: note that **emb alone reaches catch-recall 1.000**, which is why the ceiling moved off 0.940 - but it does so with an 86.8% review pile, so it is a ceiling, not an operating point |
+| 2026-09-09 | phase07+ | 541/735 | ocr+sift+emb (calibrated) | 0.578 | 0.989 | 9.2% | 0.39 | **current baseline.** Repaired labeled set, 5x larger and adversarial by construction: ~610 of the negatives are production false positives a human rejected (D-033, D-034). Bands: emb 0.90/0.95, ocr 0.75/0.80, sift weak=strong=0.30. Confusion pos 505/30/6, neg 369/87/279; wins ocr=896 sift=48 emb=47. **GATE PASSED** (0.989 >= 0.97, 9.2% <= 10%). Precision is not comparable to the 0.873 row above - that one was measured against negatives nothing had ever flagged. The user-facing number, measured directly on the 3,370-image run, is `detected/` **56.1%** correct and `review/` 19.7%. The 10% review cap is binding and is what pushes borderline images into `positive` |
 
 ## Production runs (append-only)
 
@@ -82,4 +83,20 @@ Notes:
   site export, where the mark sits in headers, footers and marketing material. At the labeled-set
   precision of 0.873 a meaningful minority of those will be false positives; the user's review of
   `detected/` and `review/` is what turns this into labels for the next calibration.
+
+### 2026-09-09 - what the production run actually got right
+
+Not a threshold sweep: the user's own judgements from `output/crops/` cross-referenced against the
+3,370-image run, so this is the shipped detector graded on the real collection.
+
+| band | contains the logo | does not | never reviewed | correct |
+|---|---|---|---|---|
+| positive (`detected/`) | 458 | 358 | 27 | **56.1%** |
+| review (`review/`) | 62 | 253 | 7 | 19.7% |
+| negative | 5 | 140 | 1,242 | - |
+
+520 real logos were surfaced across the two folders and 5 known ones were dropped. The 1,242
+unreviewed negatives are the open question `tools/audit_negatives.py` exists to answer - until that
+sample comes back, no recall figure in this file is independent of the detector that produced it
+(D-034).
 

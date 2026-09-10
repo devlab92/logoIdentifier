@@ -458,3 +458,59 @@ The same asymmetry is why the next item matters:
 Detection of a crop must anchor at the end of the stem, not test `"_crop" in stem`: the substring
 test pulled a legitimate image named `cropped-flavicon.png` out of the labeled set.
 
+
+## D-034 - Recalibration on 1,276 images, and the precision number that was always true
+Calibrated on the repaired labeled set (541 positive / 735 negative, `ocr,sift,emb`, 9,261,000
+combinations, 2026-09-09):
+
+| signal | weak (review) | strong (positive) |
+|---|---|---|
+| emb | 0.90 | 0.95 |
+| ocr | 0.75 | 0.80 |
+| sift | 0.30 | 0.30 |
+
+precision **0.578**, catch-recall **0.989**, review share **9.2%**. Confusion - positives:
+505 / 30 / 6; negatives: 369 / 87 / 279. Signal wins: ocr 896, sift 48, emb 47. **GATE: PASSED.**
+
+### Precision did not fall from 0.873 to 0.578; the ruler got honest
+The phase05 negative set was 160 images that were mostly *never flagged by anything*. The new one
+is 735 images of which ~610 are cases the detector flagged during the production run and a human
+then rejected - **every one of them is a proven false positive.** Measuring precision against a
+population selected for having fooled the detector is a different, much harder question than the
+one phase05 answered, and the drop is almost entirely that change of question.
+
+The number that settles it needs no labeled set at all. Cross-referencing the user's judgements
+against the actual 3,370-image run:
+
+| folder | contains the logo | does not | correct |
+|---|---|---|---|
+| `detected/` (843) | 458 | 358 | **56.1%** |
+| `review/` (322) | 62 | 253 | 19.7% |
+
+So the shipped detector was always putting roughly four non-logos into `detected/` for every five
+logos. Phase05's 0.873 never described that; it described an easier sample. This is the number the
+USER_GUIDE has to carry.
+
+### The 10% review cap is what fills `detected/` with false positives
+`TARGET_REVIEW_SHARE = 0.10` is a *binding* constraint at this dataset size: 10% of 1,276 is 128
+review slots, and the search used 117 of them. With review effectively full and
+`TARGET_CATCH_RECALL = 0.97` to satisfy, the only place left for a borderline image is `positive`.
+The 369 false positives are not the search failing - they are the search obeying a review budget
+that was set when the labeled set was 258 images and the review pile meant something else.
+
+Loosening that cap is therefore the lever, not a threshold: it would let `detected/` become a
+folder worth trusting while `review/` absorbs the doubt, for the same total human effort. Left
+undone deliberately - see the recall question below, which has to be answered first, because it
+could change what the right trade even is.
+
+### Every recall number so far is circular, and now there is a tool for that
+Catch-recall 0.989 is measured on 541 positives of which ~467 are images **the detector already
+found**. That measures how often it is right about its own hits, not how often it finds everything.
+The 1,744 images it rejected have never been looked at by anyone.
+
+`tools/audit_negatives.py` breaks the circle the only way it can be broken: a random sample of the
+`negative` band - duplicates, failures and already-labeled images excluded - copied out as full
+images for a human to check, then counted into a miss rate with a Wilson confidence interval. The
+interval matters: 0 hits out of 100 is not a proven zero, it is "under about 3.7%", which over 1,387
+unique negatives is still up to ~51 missed logos.
+
