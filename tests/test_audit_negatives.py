@@ -157,6 +157,43 @@ def test_report_counts_what_the_human_moved(workspace, capsys):
     assert "miss rate            : 20.0%" in out
 
 
+def test_recall_counts_confirmed_logos_not_flagged_images(workspace, capsys):
+    """The formula this pins got shipped wrong once, and read far too well.
+
+    Recall is `confirmed / (confirmed + missed)`. Using *flagged* images as the
+    numerator silently answers a different question - "of everything I pointed
+    at, how much did I point at?" - and on the real run it turned 94.6% into
+    97.7%, straddling the project's 0.97 target.
+    """
+    flagged = [f"f/hit{i}.png" for i in range(2)] + [f"f/junk{i}.png" for i in range(2)]
+    hidden = [f"n/unlabeled{i}.png" for i in range(18)]
+    negatives = hidden + ["n/knownmiss.png", "n/truenegative.png"]
+    _write_inputs(workspace, flagged + negatives)
+    write_csv(
+        [_row(r, band="positive") for r in flagged] + [_row(r) for r in negatives],
+        workspace / "results.csv",
+    )
+    for name, cls in (("hit0.png", "positive"), ("hit1.png", "positive"),
+                      ("junk0.png", "negative"), ("junk1.png", "negative"),
+                      ("knownmiss.png", "positive"), ("truenegative.png", "negative")):
+        (workspace / "labeled" / cls / name).write_bytes(b"x")
+
+    _run(workspace, "--count", "10", "--seed", "3")
+    audit = workspace / "audit"
+    one = sorted(p for p in audit.iterdir() if p.is_file() and p.name != "manifest.csv")[0]
+    one.rename(audit / "has_logo" / one.name)
+    capsys.readouterr()
+
+    _run(workspace, "--report")
+    out = capsys.readouterr().out
+
+    # 1 hit / 10 sampled = 10% over the 18 unlabeled negatives -> 1.8 hidden,
+    # plus 1 already-known miss, against 2 confirmed finds: 2 / 4.8 = 41.7%.
+    assert "41.7%" in out
+    assert "against 2 confirmed logos" in out
+    assert "69" not in out, "recall was computed from flagged images, not confirmed ones"
+
+
 def test_report_ignores_a_stray_file_and_says_so(workspace, capsys):
     relatives = ["2020-01/pic.png"]
     _write_inputs(workspace, relatives)
@@ -169,6 +206,52 @@ def test_report_ignores_a_stray_file_and_says_so(workspace, capsys):
 
     assert "logos found in it    : 0" in out
     assert "not from this sample" in out
+
+
+def test_near_miss_takes_the_images_closest_to_the_line(workspace):
+    relatives = [f"2020-01/pic{i}.png" for i in range(6)]
+    _write_inputs(workspace, relatives)
+    rows = []
+    for i, relative in enumerate(relatives):
+        row = _row(relative)
+        row.confidence = i / 10  # pic5 is the closest to the review line
+        rows.append(row)
+    write_csv(rows, workspace / "results.csv")
+
+    _run(workspace, "--near-miss", "--count", "2")
+
+    copied = {p.name for p in (workspace / "audit").iterdir()
+              if p.is_file() and p.name != "manifest.csv"}
+    assert copied == {"2020-01__pic5.png", "2020-01__pic4.png"}
+
+
+def test_a_near_miss_sample_refuses_to_report_a_rate(workspace, capsys):
+    """A sample the detector chose cannot be used to measure the detector.
+
+    These images were picked precisely because they nearly passed, so the share
+    of logos among them is far above the band average - reporting it as a miss
+    rate would invent a crisis.
+    """
+    relatives = [f"2020-01/pic{i}.png" for i in range(6)]
+    _write_inputs(workspace, relatives)
+    write_csv([_row(r) for r in relatives], workspace / "results.csv")
+    _run(workspace, "--near-miss", "--count", "4")
+
+    audit = workspace / "audit"
+    hit = sorted(p for p in audit.iterdir() if p.is_file() and p.name != "manifest.csv")[0]
+    hit.rename(audit / "has_logo" / hit.name)
+    capsys.readouterr()
+
+    assert _run(workspace, "--report") == 0
+    out = capsys.readouterr().out
+
+    assert "logos found in it    : 1" in out
+    # The explanation mentions the miss rate; what must never appear is the
+    # computed one, nor any recall estimate derived from it.
+    assert "miss rate            :" not in out, "a targeted sample produced a rate"
+    assert "true recall" not in out
+    assert "not at random" in out
+    assert "recalibrate" in out
 
 
 def test_report_without_a_manifest_fails_cleanly(workspace, capsys):

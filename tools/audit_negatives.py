@@ -39,13 +39,12 @@ from logoscanner.results import read_csv  # noqa: E402
 
 MANIFEST = "manifest.csv"
 FOUND_DIR = "has_logo"
-MANIFEST_COLUMNS = ("sample_name", "source")
+MANIFEST_COLUMNS = ("sample_name", "source", "mode")
 
 
-def labeled_names(labeled: Path) -> set[str]:
-    """Every filename already in the labeled set, with the `<month>__` prefix
-    stripped as well, so an image is recognised under either spelling."""
-    names: set[str] = set()
+def _label_map(labeled: Path) -> dict[str, str]:
+    """`{filename: class}`, each label readable under either spelling."""
+    out: dict[str, str] = {}
     for cls in ("positive", "negative"):
         folder = labeled / cls
         if not folder.is_dir():
@@ -53,10 +52,15 @@ def labeled_names(labeled: Path) -> set[str]:
         for path in folder.iterdir():
             if not path.is_file() or path.name == ".gitkeep":
                 continue
-            names.add(path.name)
+            out[path.name] = cls
             if "__" in path.name:
-                names.add(path.name.split("__", 1)[1])
-    return names
+                out[path.name.split("__", 1)[1]] = cls
+    return out
+
+
+def labeled_names(labeled: Path) -> set[str]:
+    """Every filename already in the labeled set, under either spelling."""
+    return set(_label_map(labeled))
 
 
 def flat_name(relative: str) -> str:
@@ -105,7 +109,17 @@ def prepare(args) -> int:
         return 1
 
     count = min(args.count, len(pool))
-    sample = random.Random(args.seed).sample(sorted(pool), count)
+    if args.near_miss:
+        # Harvesting, not measuring: the images that came closest to the review
+        # line are where the misses concentrate, so reviewing them finds blind
+        # spots faster than chance. The price is that this sample is chosen by
+        # the detector, so it can never estimate a rate - see `report`.
+        confidence = {r.filename: r.confidence for r in rows}
+        sample = sorted(pool, key=lambda name: (-confidence.get(name, 0.0), name))[:count]
+        mode = "near-miss"
+    else:
+        sample = random.Random(args.seed).sample(sorted(pool), count)
+        mode = "random"
 
     out = Path(args.out)
     if out.exists() and any(out.iterdir()):
@@ -120,18 +134,25 @@ def prepare(args) -> int:
             name = flat_name(relative)
             shutil.copy2(artifacts.long_path(Path(args.input) / relative),
                          artifacts.long_path(out / name))
-            writer.writerow({"sample_name": name, "source": relative})
+            writer.writerow({"sample_name": name, "source": relative, "mode": mode})
 
     negatives = sum(1 for r in rows if r.band == "negative" and not r.duplicate_of)
     print(f"pool of unlabeled negatives : {len(pool)}")
-    print(f"sampled (seed {args.seed})           : {count}")
+    if mode == "near-miss":
+        scores = [r.confidence for r in rows if r.filename in set(sample)]
+        print(f"taken (closest to the line) : {count}"
+              f"   confidence {min(scores):.2f} - {max(scores):.2f}")
+        print("mode                        : near-miss (harvest blind spots, NOT a rate)")
+    else:
+        print(f"sampled (seed {args.seed})           : {count}")
+        print("mode                        : random (unbiased, measures the miss rate)")
     print(f"copied into                 : {out}")
     print()
     print("Now: open that folder and look at each image. If an image DOES contain")
     print(f"the logo, move it into {out / FOUND_DIR}. Leave the rest where they are.")
     print(f"Then run:  python tools\\audit_negatives.py --report --out {out}")
     print()
-    print(f"(this measures a band holding {negatives} unique images)")
+    print(f"(the negative band holds {negatives} unique images)")
     return 0
 
 
@@ -152,23 +173,55 @@ def report(args) -> int:
     total = len(entries)
     reviewed = hits + sum(1 for row in entries if (out / row["sample_name"]).is_file())
 
-    rows = read_csv(args.results)
-    negatives = sum(1 for r in rows if r.band == "negative" and not r.duplicate_of)
-    flagged = sum(1 for r in rows if r.band != "negative" and not r.duplicate_of)
+    rows = [r for r in read_csv(args.results) if not r.duplicate_of]
+    already = labeled_names(Path(args.labeled))
+    positives = {name for name, cls in _label_map(Path(args.labeled)).items()
+                 if cls == "positive"}
 
-    low, high = wilson(hits, total)
-    print(f"sample size          : {total}")
+    # Recall counts *confirmed* logos, not flagged images: only 520 of the 1,165
+    # images this scanner flagged actually carry the mark, so
+    # flagged / (flagged + missed) would silently answer a different question.
+    found = sum(1 for r in rows if r.band != "negative" and Path(r.filename).name in positives)
+    negatives = [r for r in rows if r.band == "negative"]
+    known_misses = sum(1 for r in negatives if Path(r.filename).name in positives)
+    # The sample was drawn from the unlabeled negatives, so the rate applies to
+    # those only; misses among the labeled ones are already counted exactly.
+    pool = sum(1 for r in negatives
+               if Path(r.filename).name not in already
+               and flat_name(r.filename) not in already)
+
+    mode = entries[0].get("mode", "random") if entries else "random"
+    print(f"sample size          : {total}  ({mode})")
     print(f"reviewed             : {reviewed}" + ("" if reviewed == total else "  (INCOMPLETE)"))
     print(f"logos found in it    : {hits}")
-    print(f"miss rate            : {hits / total:.1%}  (95% CI {low:.1%} - {high:.1%})")
-    print()
-    print(f"the negative band holds {negatives} unique images, so that is roughly")
-    print(f"  {round(low * negatives)} to {round(high * negatives)} logos sitting in it, best guess {round(hits / total * negatives)}")
-    if flagged:
-        best = hits / total * negatives
+
+    if mode != "random":
+        # A sample the detector chose cannot measure the detector. Reporting a
+        # rate off it would read as a 10x worse miss rate purely because these
+        # images were picked for being borderline.
         print()
-        print(f"against {flagged} images the scanner did flag, that puts true recall near")
-        print(f"  {flagged / (flagged + best):.1%}  (best guess; the CI above is the honest spread)")
+        print("This sample was chosen by confidence, not at random, so it says nothing")
+        print("about the miss rate - it exists to FIND misses, not to count them.")
+        print(f"Add the {hits} image(s) in {FOUND_DIR} to data/labeled/positive/ and recalibrate;")
+        print("keep the random sample for the measurement.")
+        if unknown:
+            print(f"\nwarning: {len(unknown)} file(s) in {FOUND_DIR} are not from this sample")
+        return 0
+
+    low, high = wilson(hits, total)
+    rate = hits / total
+    print(f"miss rate            : {rate:.1%}  (95% CI {low:.1%} - {high:.1%})")
+    print()
+    print(f"{pool} unlabeled images sit in the negative band, so the logos hiding there number")
+    print(f"  roughly {round(low * pool)} to {round(high * pool)}, best guess {round(rate * pool)}"
+          f"  (+{known_misses} already known)")
+    if found:
+        def recall(missed: float) -> float:
+            return found / (found + missed + known_misses)
+        print()
+        print(f"against {found} confirmed logos the scanner did surface, true recall is")
+        print(f"  {recall(rate * pool):.1%}   (range {recall(high * pool):.1%} - "
+              f"{recall(low * pool):.1%})")
     if unknown:
         print(f"\nwarning: {len(unknown)} file(s) in {FOUND_DIR} are not from this sample "
               f"and were ignored")
@@ -183,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="output/audit")
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--near-miss", action="store_true", dest="near_miss",
+                        help="take the images closest to the review line instead of a random "
+                             "sample: finds blind spots faster, but cannot measure a rate")
     parser.add_argument("--report", action="store_true",
                         help="summarise a sample a human has finished sorting")
     args = parser.parse_args(argv)
